@@ -1,6 +1,6 @@
 {
-  "summary": "Comprehensive architectural blueprint and implementation plan for the Arcana Resonatia Game Master Studio & Playtest Simulator, featuring an Item & Equipment Forge, Hex Map Builder, Three.js 3D Physics Dice Roller, and Live Playtest Table with persistent browser storage.",
-  "updatedAt": "2026-10-14T17:25:59.949071176Z",
+  "summary": "Detailed analysis and implementation plan for: (1) Scalable chunk map editor with adjustable chunk size (kr) and map capacity (max chunks), (2) Standard player mechanics (equip/unequip, consumables in turn-based vs free-test modes), (3) Defeat handling without auto-reset (revive vs respawn vs reset), (4) GM Combat Hack / Match Editor popup in Balance Analytics, and (5) 3D dice performance optimizations (texture caching, zero-GC physics loop, throttled shadow rendering).",
+  "updatedAt": "2026-10-14T18:19:00.953088628Z",
   "requestFeedback": true,
   "userFacing": true
 }

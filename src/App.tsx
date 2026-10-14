@@ -183,7 +183,7 @@ export default function App() {
         )}
 
         {activeTab === 'analytics' && (
-          <BalanceAnalytics />
+          <BalanceAnalytics allItems={gameState.items} />
         )}
       </main>
 

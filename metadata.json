@@ -2,5 +2,7 @@
   "name": "Arcana Resonatia — GM Studio & Playtest Suite",
   "description": "Game Master workstation, game balancing suite, custom item & map forge, and 3D dice physics playtest simulator for Arcana Resonatia.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

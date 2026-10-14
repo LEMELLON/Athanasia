@@ -1,123 +1,71 @@
-# Arcana Resonatia — Game Master Studio & Playtest Suite
+# Arcana Resonatia — GM Studio & Playtest Suite (Revision 3)
 
-A specialized tabletop and digital hybrid Game Master (GM) workstation, game balancing suite, and playtest sandbox for **Arcana Resonatia** (inspired by Greek mythology and the v7 GDD). Built for rapid balance iteration, custom item and weapon creation, interactive hex-chunk map building, realistic 3D dice rolling, and turn-based simulation.
+Comprehensive architectural analysis and plan for the new features: Scalable Chunks & Chunk Size, Balance Analytics GM Match Hacker & Inventory Controls, and 3D Dice Performance Optimizations.
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The architectural direction below is aligned with your confirmed design preferences:
-> - **Unified GM Studio**: Multi-tab interface featuring **Item Forge**, **Map Architect**, **3D Dice Chamber**, **Match Simulator**, and **Balance Analytics**.
-> - **Interactive 3D Physics Dice**: A responsive Three.js canvas overlay providing physical tumbling animations for 2d6, d20, d8, and d6 across gameplay events (movement, hit rolls, damage, boss mutiny) plus GM freeform rolls.
-> - **Hex Chunk Generator & Brush Painter**: Procedural generation following the 7-hex flower chunk rules (depth bands, spawn penalty, connectivity check) paired with an interactive brush painter for rapid custom tile and biome editing.
-> - **Persistent Instance Storage**: Real-time auto-saving to `localStorage` with JSON export/import and cookie backup, guaranteeing no work or playtest progress is lost on reload.
+> The following 5 major enhancements have been analyzed in detail:
+>
+> 1. **Scalable Chunks & Chunk Size Editor**:
+>    - **Chunk Size ($k_r$)**: Variable tiles-per-chunk: $k_r = 0$ (1 tile), $k_r = 1$ (7-hex flower), $k_r = 2$ (19-tile giant flower), $k_r = 3$ (37 tiles).
+>    - **Scalable Map Capacity**: Stepper / slider to increase total chunks ($7, 19, 37, 61, 91, 127\dots$). Dynamic concentric coordinate generation allowing GMs to build and pan across massive multi-biome worlds.
+>
+> 2. **Balance Analytics: Equip/Unequip & Consumable Modes**:
+>    - Full equip & unequip mechanics (click equipped item to remove and return to unarmed/unarmored defaults).
+>    - Dual consumable usage: **Turn-Consuming Mode** (standard combat action) vs **Free Test Mode** (instantly apply without burning the turn or triggering enemy retaliation).
+>
+> 3. **Defeat Handling: No Auto-Reset**:
+>    - Reaching 0 HP no longer wipes the character. A **Defeat Resolution Modal** gives the GM 3 options:
+>      - **Revive Here**: Instant restore to full HP/MP to continue the test fight.
+>      - **Respawn at Start**: Apply standard 3-life rule (-1 life, 25% wallet penalty, reset monster).
+>      - **Reset to Lv 1**: Manual restart only when desired.
+>
+> 4. **GM Match Hack / Sandbox Override Popup**:
+>    - Live modal to directly edit/hack the active test encounter:
+>      - Override Player HP, MP, Lives, Total SR, and Wallet SR.
+>      - Add/remove 1-HP summon tokens.
+>      - Manually afflict statuses (Ignited, Drenched, Splintered, Staggered, Shielded).
+>      - Override active Mob HP, Defense, and CR mid-combat.
+>
+> 5. **3D Dice Performance & Frame-Rate Optimization**:
+>    - Fix lag and stuttering by:
+>      - **Texture Caching**: Pre-generate and cache face decals once in memory (zero dynamic canvas recreation per roll).
+>      - **Zero Garbage Collection (GC)**: Pre-allocate vectors (`_v3`, `_quat`) outside the render tick.
+>      - **Capped Pixel Ratio**: Limit WebGL canvas pixel ratio to `Math.min(devicePixelRatio, 1.5)`.
+>      - **Static Render Idle**: Stop rendering when dice are settled to conserve CPU/GPU.
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Detailed Analysis of Changes
 
-### What It Does
-1. **Item, Weapon & Gear Forge**: Create, edit, duplicate, and balance weapons, armor, shields, and consumables. Features an instant TTK (Time-to-Kill) and Damage-per-Turn (DPT) calculator against target Defense and HP thresholds across all 6 biomes and 4 champion classes.
-2. **Hex Map Architect**: Procedural 7-hex flower chunk generator adhering to the Guide Book v7 rules (Boss sanctum, 6 spawn chunks, Hex Loader dice, Depth bands 0–5) plus a freehand click-to-paint tile brush (Path, Wall, Obstacle, Mob, Chest, Portal, Soul Corridor, Shrine, Spawn).
-3. **3D Physics Dice Roller (Three.js)**: Physically simulated polyhedral dice (d20, d6, 2d6, d8) rendered with studio PBR materials, procedural numerals, ambient shadows, and authentic tumble/bounce kinematics. Triggers automatically on game actions and is accessible on demand.
-4. **Live Playtest Simulator**: 2–6 player match engine supporting Cana (Ranger), Bhana (Warrior), Prana (Mage), and Gana (Summoner), complete with 3-Life / Soul Spark permadeath rules, 2d6 resolution combat, elemental advantage multipliers (1.5× / 0.5×), Soul Corridor shops, and Aion boss fight.
-5. **Persistence & Portability**: Live browser storage syncing with one-click export/import of custom balance packages (compatible with team collaboration).
+### A. Scalable Chunks in Chunk Map Editor
+- **Chunk Radius ($k_r$)**:
+  - In the v7 rules:
+    - $k_r = 0 \implies 1$ tile per chunk.
+    - $k_r = 1 \implies 7$ tiles per chunk (standard flower).
+    - $k_r = 2 \implies 19$ tiles per chunk.
+  - Formula: $\text{tiles} = 3 k_r (k_r + 1) + 1$.
+- **Max Chunks & Board Expansion**:
+  - The map will allow selecting max chunk capacity: 7 (minimal), 19 (standard), 37 (classic 30 Hex Loader dice), 61, 91, or custom.
+  - The SVG canvas dynamically renders the concentric slot rings, allowing the GM to toggle any chunk in the expanded radius and pan/zoom freely.
 
----
+### B. Balance Analytics Player Mechanics & GM Match Hacker
+- **Equip / Unequip**:
+  - Clicking any weapon or armor in the bag equips it immediately.
+  - Clicking an equipped item gives an "Unequip" option, safely reverting to basic unarmed (d6) or unarmored (base AC 0).
+- **Consumable Execution**:
+  - Standard action button: drinks potion and triggers enemy counter-action.
+  - Test action button (and in Hack popup): drinks potion as a free test action without advancing the turn or triggering enemy attack.
+- **Defeat Resolution**:
+  - When HP hits 0, the game pauses and prompts the GM instead of auto-resetting.
+- **GM Match Hacker UI**:
+  - A dedicated "⚙ Hack Current Match" floating button in the toolbar opening a full GM control panel for mid-combat overrides.
 
-## 2. User Experience & Visual Design
-
-### Key User Flows
-- **Flow 1: Balancing & Weapon Tuning**: The GM selects or creates a weapon (e.g. *Forgefire Longbow* or *Anvil of Hephaestus*), tweaks base damage, range, and passive effects, and watches real-time winrate and damage curves against CR 1–20 monsters.
-- **Flow 2: Map Crafting & Inspection**: The GM configures chunk count and biomes or paints custom tiles using the brush tool, runs the automatic connectivity repair algorithm, and inspects spawn advantage scores.
-- **Flow 3: Playtesting a Match**: The GM starts a session with 2–4 players, rolls initiative via 3D tumbling dice, moves tokens across hexes, resolves mob encounters and PvP duels, buys stat upgrades at Soul Corridors, and triggers the Global Breach on Aion.
-- **Flow 4: Freeform 3D Dice Rolling**: The GM clicks the floating Dice HUD anytime to roll custom combinations (2d6, 1d20, d8 Element Die) with tactile visual tumbling.
-
-### Visual Identity & Theme
-- **Aesthetic Direction**: Celestial Greek Mythological Dark Fantasy meets High-Precision GM Terminal. Inspired by Olympian bronze, marble, and deep abyss tones.
-- **Color Palette**:
-  - Dominant Canvas (60%): Void Black `#0c100e` and Deep Laurel `#141e18`.
-  - Structural Surfaces (30%): Obsidian Slate `#1c2822` with hairline borders in `#2e3f36`.
-  - Focal Accents (10%): Olympian Gold `#d4a94a` (actions, crits), Radiant Sun `#ffd166`, and Celestial Cyan `#4aa3e0`.
-  - Elemental Hues: Aquis Blue `#2f6fa8`, Pyria Crimson `#e0553a`, Aeria Mint `#4f9c88`, Geia Umber `#85663a`, Phosia Amber `#ffd166`, Skotosia Violet `#9a66d6`.
-- **Typography & Hierarchy**:
-  - Display & Headings: `Cinzel` / `Fraunces` / `Plus Jakarta Sans` for grand mythic presence.
-  - Body & Form Controls: Clean, highly legible `Plus Jakarta Sans` or `DM Sans`.
-  - Stat Tables & Dice Math: `font-mono tabular-nums` for precise arithmetic alignment.
-
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Integrated Tabbed Studio vs Separate Windows**:
-  - *Decision*: A unified single-page application with top-level tabs (`[Forge] [Map Architect] [Playtest Match] [Dice Chamber] [Balance Analytics]`).
-  - *Why*: Allows instant back-and-forth testing: tweak a weapon in the Forge, jump straight into the active playtest session, and verify the effect immediately without resetting state.
-- **Three.js WebGL Dice Canvas Overlay**:
-  - *Decision*: A lightweight, high-performance Three.js WebGL canvas embedded directly into the DOM that can pop in as an active rolling overlay during combat/movement or be toggled into a persistent side dock.
-  - *Why*: Fulfills the explicit user request for physical rolling dice while maintaining zero lag on lower-spec hardware via procedural textures and minimal polygon overhead.
-- **Local Persistence Architecture**:
-  - *Decision*: Dual-layer persistence using `localStorage` as primary storage with automatic change debouncing, JSON export/download, and cookie fallback for metadata.
-  - *Why*: Instant offline reliability; reloads retain all customized weapons, painted maps, and ongoing combat HP bars.
-
----
-
-## 4. Technical Architecture & Data Strategy
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                   Arcana Resonatia GM Studio Hub                       │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-    ┌───────────────────┬───────────┴───────────┬────────────────────┐
-    ▼                   ▼                       ▼                    ▼
-┌──────────────┐ ┌───────────────┐     ┌─────────────────┐ ┌────────────────┐
-│  Item Forge  │ │ Map Architect │     │ 3D Dice Engine  │ │ Playtest Match │
-│  & Balancer  │ │ & Hex Painter │     │ (Three.js WebGL)│ │ Table & Rules  │
-└──────┬───────┘ └──────┬────────┘     └────────┬────────┘ └───────┬────────┘
-       │                │                       │                  │
-       └────────────────┴───────────┬───────────┴──────────────────┘
-                                    │
-                                    ▼
-                ┌──────────────────────────────────────┐
-                │ Central Game State & Storage Manager │
-                │   (Local Storage + JSON Import/Export)│
-                └──────────────────────────────────────┘
-```
-
-### Core Entities & State Models
-1. **Equipment & Items (`ItemEntity`)**:
-   - `id`, `name`, `type` (`weapon`, `armor`, `shield`, `consumable`), `classReq` (`Cana`, `Bhana`, `Prana`, `Gana`, `All`).
-   - `biome` (`Pyria`, `Geia`, `Hydoria`, `Aeria`, `Phosia`, `Skotosia`, `Universal`).
-   - `rarity` (`Common`, `Uncommon`, `Rare`, `Epic`, `Legendary`).
-   - `stats`: Base ATK / AC, Range min/max, Stat scaling (STR, DEX, INT, WIS), DEX/CON penalties, passive effect description and programmatic trigger tag.
-2. **Map & Tile Grid (`HexTile`, `Chunk`)**:
-   - Hex axial coordinates `(q, r)`, `ring`, `depth` (0–5).
-   - Tile Type: `Path`, `Wall`, `Obstacle`, `Chest`, `Mob`, `Boss`, `Portal`, `Shop`, `Shrine`, `Spawn`.
-   - Biome metadata, Spawn ownership, and Mob placement data.
-3. **Player Session (`PlayerState`)**:
-   - Name, Class archetype, Affinity element, Core Stats (STR, CON, DEX, INT, WIS, CHAR), Derived stats (HP, MP, DV, Speed, PB).
-   - Inventory, Equipped loadout, Soul Resonance (SR Held vs Total SR), Lives (3 max), Key count.
-4. **3D Dice Controller (`DiceRollEvent`)**:
-   - Type (`d20`, `2d6`, `d8`, `d6`), angular impulse, physical settling vector, roll result callback.
-
----
-
-## 5. Implementation Steps & Verification Plan
-
-1. **Step 1: Install Three.js & Setup Core Libraries**:
-   - Add `three` and `@types/three` via `install_applet_package`.
-2. **Step 2: Pre-populated Game Data & Rules Engine**:
-   - Embed all weapons, armor, consumables, enemies, and bosses directly transcribed from the provided GDD pages (6–71).
-3. **Step 3: Item, Weapon & Equipment Forge Component**:
-   - Interactive CRUD editor with stat inputs, elemental modifiers, rarity badges, filterable catalog, and instant combat simulator widget.
-4. **Step 4: Map Architect & Brush Painter**:
-   - Interactive SVG hex grid renderer supporting zoom/pan, procedural flower chunk generation, brush tile tools, and connectivity checking.
-5. **Step 5: 3D Rolling Dice Engine (Three.js)**:
-   - Procedural 3D dice meshes with authentic tumbling kinematics, studio lighting, shadow planes, and sound/visual impact effects.
-6. **Step 6: Unified Playtest Match Table**:
-   - Full gameplay simulator supporting 2–6 players, initiative tracking, movement calculations, combat resolution (PvE and PvP), and boss mutiny mechanics.
-7. **Step 7: Instance Saving & Export**:
-   - Real-time `localStorage` autosave, JSON export/import modal, and reset controls.
-8. **Step 8: Verification**:
-   - Run `compile_applet` and test all interactive features for zero errors and responsive interactions.
+### C. 3D Dice Engine Optimization
+- Replace on-the-fly canvas texture creation with a global memoized `TextureCache`.
+- Reuse `BoxGeometry` and `IcosahedronGeometry` meshes rather than destroying and recreating Three.js geometries each roll.
+- Reduce directional shadow map resolution from 1024 to 512 with `shadow.autoUpdate = isRolling` so GPU load drops to 0 when idle.
+- Maintain pre-allocated Vector3 math pools to eliminate garbage collection micro-stutters.
