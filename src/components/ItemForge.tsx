@@ -306,7 +306,7 @@ export const ItemForge: React.FC<Props> = ({ items, onUpdateItems }) => {
                       {(item.category === 'armor' || item.category === 'shield') && (
                         <>
                           <div>Base AC: <b className="text-emerald-400">+{item.baseAc}</b></div>
-                          <div>DEX Pen: <b className="text-amber-400">{item.dexPenalty ? `-${item.dexPenalty}` : '0'}</b></div>
+                          <div>AGI Pen: <b className="text-amber-400">{item.dexPenalty ? `-${item.dexPenalty}` : '0'}</b></div>
                         </>
                       )}
                       {item.category === 'consumable' && (
@@ -508,7 +508,7 @@ export const ItemForge: React.FC<Props> = ({ items, onUpdateItems }) => {
                         className="w-full px-2.5 py-1 rounded bg-[#192720] border border-[#35493e] text-stone-200"
                       >
                         <option value="STR">STR (Melee weapons, Cleavers, Clubs)</option>
-                        <option value="DEX">DEX (Bows, Finesse, Slingshots)</option>
+                        <option value="AGI">AGI (Bows, Finesse, Daggers, Slingshots)</option>
                         <option value="INT">INT (Wands, Tomes, Elemental Arcana)</option>
                         <option value="WIS">WIS (Staves, Sacred Divinity)</option>
                       </select>

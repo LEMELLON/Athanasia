@@ -4,7 +4,8 @@ export type ItemCategory = 'weapon' | 'armor' | 'shield' | 'consumable';
 export type Rarity = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 export type CharacterClass = 'Cana' | 'Bhana' | 'Prana' | 'Gana';
 
-export type StatKey = 'STR' | 'CON' | 'DEX' | 'INT' | 'WIS' | 'CHAR';
+// Aligned with GDD v0.2: STR, AGI (formerly DEX), VIT (formerly CON), INT, WIS, CHAR
+export type StatKey = 'STR' | 'AGI' | 'VIT' | 'INT' | 'WIS' | 'CHAR' | 'DEX' | 'CON';
 
 export interface ItemEntity {
   id: string;
@@ -23,8 +24,8 @@ export interface ItemEntity {
   attacksPerAction?: number;
   // Armor/Shield stats
   baseAc?: number;
-  dexPenalty?: number;
-  conBonus?: number;
+  dexPenalty?: number; // Agility penalty
+  conBonus?: number;   // Vitality bonus
   // Consumable stats
   healHpPct?: number;
   restoreMpPct?: number;
@@ -69,6 +70,15 @@ export interface HexTile {
   isShrine?: boolean;
 }
 
+export interface ChunkNode {
+  key: string; // "q,r"
+  q: number;
+  r: number;
+  biome: BiomeType | 'Random';
+  isBoss: boolean;
+  spawnIndex?: number; // 1 to 6
+}
+
 export interface PlayerCharacter {
   id: number;
   name: string;
@@ -77,7 +87,7 @@ export interface PlayerCharacter {
   bio: string;
   color: string;
   affinity: ElementType;
-  stats: Record<StatKey, number>;
+  stats: Record<string, number>;
   level: number;
   totalSr: number;
   walletSr: number;
@@ -87,9 +97,9 @@ export interface PlayerCharacter {
   maxMp: number;
   currentMp: number;
   counters: ElementType[];
-  equippedWeapon?: ItemEntity;
-  equippedArmor?: ItemEntity;
-  equippedShield?: ItemEntity;
+  equippedWeapon?: ItemEntity | null;
+  equippedArmor?: ItemEntity | null;
+  equippedShield?: ItemEntity | null;
   pack: ItemEntity[];
   position: string; // "q,r"
   keys: number;
@@ -109,3 +119,39 @@ export interface GameSettings {
   hitThreshold: number;
   damageDie: number;
 }
+
+export type CardType = 'Attack' | 'Spell' | 'Trap';
+
+export interface PvPCard {
+  id: string;
+  className: CharacterClass;
+  title: string;
+  type: CardType;
+  range?: number;
+  costHp?: number;
+  costMp?: number;
+  effect: string;
+  flavor?: string;
+}
+
+export interface PvPDuelState {
+  isActive: boolean;
+  playerAId: number;
+  playerBId: number;
+  wagerSr: number;
+  wagerItemAId?: string | null;
+  wagerItemBId?: string | null;
+  playerAHand: PvPCard[];
+  playerBHand: PvPCard[];
+  playerADeck: PvPCard[];
+  playerBDeck: PvPCard[];
+  playerATraps: { card: PvPCard; isRevealed: boolean }[];
+  playerBTraps: { card: PvPCard; isRevealed: boolean }[];
+  activeDuelistId: number;
+  turnNumber: number;
+  combatLog: string[];
+  winnerId?: number | null;
+  playerASummon?: { name: string; hp: number } | null;
+  playerBSummon?: { name: string; hp: number } | null;
+}
+

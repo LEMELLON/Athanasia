@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ItemEntity, CharacterClass } from '../types/game';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { ItemEntity, CharacterClass, ElementType } from '../types/game';
 import { CLASS_PVP_DECKS, PvPCard } from '../data/pvpCards';
 
 interface Props {
   allItems?: ItemEntity[];
 }
 
-const SANDBOX_STORAGE_KEY = 'arcana_sandbox_balance_save_v1';
+const SANDBOX_STORAGE_KEY = 'arcana_sandbox_balance_save_v2';
 
 // Seeded RNG: mulberry32
 function createMulberry32(seedVal: number) {
@@ -41,11 +41,17 @@ function getElementMultiplier(att: string, def: string): number {
   return 1;
 }
 
-const CHAMPIONS = {
-  atalanta: { name: 'Atalanta', cls: 'Cana' as CharacterClass, attrs: { STR: 2, AGI: 3, VIT: 1, INT: 1 }, max: { STR: 15, AGI: 20, VIT: 15, INT: 15 }, homeElement: 'air' },
-  achilles: { name: 'Achilles', cls: 'Bhana' as CharacterClass, attrs: { STR: 3, AGI: 1, VIT: 2, INT: 1 }, max: { STR: 20, AGI: 10, VIT: 15, INT: 10 }, homeElement: 'earth' },
-  medea: { name: 'Medea', cls: 'Prana' as CharacterClass, attrs: { STR: 1, AGI: 1, VIT: 2, INT: 3 }, max: { STR: 10, AGI: 10, VIT: 15, INT: 20 }, homeElement: 'fire' },
-  orpheus: { name: 'Orpheus', cls: 'Gana' as CharacterClass, attrs: { STR: 1, AGI: 2, VIT: 1, INT: 3 }, max: { STR: 10, AGI: 15, VIT: 10, INT: 20 }, homeElement: 'water' },
+const CHAMPIONS: Record<string, {
+  name: string;
+  cls: CharacterClass;
+  attrs: { STR: number; AGI: number; VIT: number; INT: number };
+  max: { STR: number; AGI: number; VIT: number; INT: number };
+  homeElement: ElementType;
+}> = {
+  atalanta: { name: 'Atalanta', cls: 'Cana', attrs: { STR: 2, AGI: 3, VIT: 1, INT: 1 }, max: { STR: 15, AGI: 20, VIT: 15, INT: 15 }, homeElement: 'Aero' },
+  achilles: { name: 'Achilles', cls: 'Bhana', attrs: { STR: 3, AGI: 1, VIT: 2, INT: 1 }, max: { STR: 20, AGI: 10, VIT: 15, INT: 10 }, homeElement: 'Pyris' },
+  medea: { name: 'Medea', cls: 'Prana', attrs: { STR: 1, AGI: 1, VIT: 2, INT: 3 }, max: { STR: 10, AGI: 10, VIT: 15, INT: 20 }, homeElement: 'Aquis' },
+  orpheus: { name: 'Orpheus', cls: 'Gana', attrs: { STR: 1, AGI: 2, VIT: 1, INT: 3 }, max: { STR: 10, AGI: 15, VIT: 10, INT: 20 }, homeElement: 'Fulgo' },
 };
 
 const BIOMES = {
@@ -66,338 +72,575 @@ const MOBS = {
   skotosia: { easy: 'Dusk Bat', medium: 'Night Stalker', hard: 'Umbral Hound' },
 };
 
-const TIER_CR: Record<string, number> = { easy: 1, medium: 4, hard: 8, guardian: 12 };
-const TIER_LOOT: Record<string, 'common' | 'uncommon' | 'rare' | 'legendary'> = { easy: 'common', medium: 'uncommon', hard: 'rare', guardian: 'legendary' };
-
-const TOTAL_SR = [0, 10, 30, 60, 100, 150, 210, 280, 360, 450, 550, 660, 780, 910, 1050, 1200, 1360, 1530, 1710, 1900];
 const PROFICIENCY = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6];
 
-interface TuningBalance {
-  mobHpBase: number;
-  mobHpPerCr: number;
-  mobDefBase: number;
-  mobDefDiv: number;
-  rarityDie: { common: number; uncommon: number; rare: number; legendary: number };
-  armorDef: { common: number; uncommon: number; rare: number; legendary: number };
-  dropThresholds: { easy: number; medium: number; hard: number; guardian: number };
-  walletLossFraction: number;
+interface DuelistState {
+  name: string;
+  cls: CharacterClass;
+  element: ElementType;
+  level: number;
+  attrs: { STR: number; AGI: number; VIT: number; INT: number };
+  maxAttrs: { STR: number; AGI: number; VIT: number; INT: number };
+  hp: number;
+  maxHp: number;
+  mp: number;
+  maxMp: number;
+  totalSR: number;
+  walletSR: number;
+  lives: number;
+  equippedWeapon: ItemEntity | null;
+  equippedArmor: ItemEntity | null;
+  inventory: ItemEntity[];
+  deck: PvPCard[];
+  hand: PvPCard[];
+  discard: PvPCard[];
+  traps: { card: PvPCard; isRevealed: boolean }[];
+  summons: { hp: number }[];
+  shieldActive: boolean;
 }
 
-const DEFAULT_TUNING: TuningBalance = {
-  mobHpBase: 15,
-  mobHpPerCr: 8,
-  mobDefBase: 6,
-  mobDefDiv: 2,
-  rarityDie: { common: 6, uncommon: 8, rare: 10, legendary: 12 },
-  armorDef: { common: 1, uncommon: 2, rare: 3, legendary: 4 },
-  dropThresholds: { easy: 11, medium: 14, hard: 17, guardian: 20 },
-  walletLossFraction: 0.25
-};
+const DEFAULT_POTIONS: ItemEntity[] = [
+  {
+    id: 'pot_hp_basic',
+    name: 'Basic Health Potion',
+    category: 'consumable',
+    rarity: 'Common',
+    biome: 'Universal',
+    classReq: 'All',
+    healHpPct: 25,
+    description: 'Restores 25% of Max HP.'
+  },
+  {
+    id: 'pot_mp_basic',
+    name: 'Basic Mana Potion',
+    category: 'consumable',
+    rarity: 'Common',
+    biome: 'Universal',
+    classReq: 'All',
+    restoreMpPct: 25,
+    description: 'Restores 25% of Max MP.'
+  }
+];
+
+// Helper to shuffle cards
+function shuffleCards(cards: PvPCard[]): PvPCard[] {
+  const arr = [...cards];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function createDuelist(champKey: keyof typeof CHAMPIONS, defaultSr = 100): DuelistState {
+  const base = CHAMPIONS[champKey];
+  const prof = PROFICIENCY[0];
+  const maxHp = 20 + base.attrs.VIT * (prof + 1) + base.attrs.STR * 2;
+  const maxMp = 10 + base.attrs.INT * 5;
+  const initialDeck = shuffleCards(CLASS_PVP_DECKS[base.cls] || CLASS_PVP_DECKS.Bhana);
+
+  return {
+    name: base.name,
+    cls: base.cls,
+    element: base.homeElement,
+    level: 1,
+    attrs: { ...base.attrs },
+    maxAttrs: { ...base.max },
+    hp: maxHp,
+    maxHp,
+    mp: maxMp,
+    maxMp,
+    totalSR: 0,
+    walletSR: defaultSr,
+    lives: 3,
+    equippedWeapon: null,
+    equippedArmor: null,
+    inventory: [...DEFAULT_POTIONS],
+    deck: initialDeck.slice(3),
+    hand: initialDeck.slice(0, 3),
+    discard: [],
+    traps: [],
+    summons: [],
+    shieldActive: false
+  };
+}
 
 export const BalanceAnalytics: React.FC<Props> = ({ allItems = [] }) => {
-  const [tuning, setTuning] = useState<TuningBalance>(() => {
-    try {
-      const saved = localStorage.getItem(`${SANDBOX_STORAGE_KEY}_tuning`);
-      if (saved) return JSON.parse(saved);
-    } catch { /* ignore */ }
-    return DEFAULT_TUNING;
-  });
+  // Mode Switcher: 'pve' = Monster Encounters, 'pvp' = Crucible 1v1 Arena
+  const [analyticsMode, setAnalyticsMode] = useState<'pve' | 'pvp'>('pve');
 
-  const [isTuningPanelOpen, setIsTuningPanelOpen] = useState(false);
+  // Modals
   const [isHackModalOpen, setIsHackModalOpen] = useState(false);
+  const [hackTarget, setHackTarget] = useState<'p1' | 'p2' | 'mob'>('p1');
   const [isDefeatedModalOpen, setIsDefeatedModalOpen] = useState(false);
   const [isDeckViewerOpen, setIsDeckViewerOpen] = useState(false);
+  const [deckViewerTarget, setDeckViewerTarget] = useState<'p1' | 'p2'>('p1');
 
-  // Setup strip state (Seed input removed per user request)
-  const [selectedChamp, setSelectedChamp] = useState<keyof typeof CHAMPIONS>('achilles');
+  // PvE Setup State
   const [selectedBiome, setSelectedBiome] = useState<keyof typeof BIOMES>('pyria');
   const [selectedTier, setSelectedTier] = useState<'easy' | 'medium' | 'hard' | 'guardian'>('easy');
   const [cr, setCr] = useState<number>(1);
 
-  // Hack popup input state
-  const [hackSrAdd, setHackSrAdd] = useState<number>(100);
-  const [selectedItemToSpawn, setSelectedItemToSpawn] = useState<string>(allItems[0]?.id || '');
+  // Both Players in the System (Player 1 = Challenger, Player 2 = Defender/Rival)
+  const [p1, setP1] = useState<DuelistState>(() => createDuelist('achilles', 120));
+  const [p2, setP2] = useState<DuelistState>(() => createDuelist('atalanta', 100));
 
-  // PvP 9-Card hand state
-  const [currentHand, setCurrentHand] = useState<PvPCard[]>([]);
-  const [activeTraps, setActiveTraps] = useState<PvPCard[]>([]);
+  // Turn tracking for PvP
+  const [pvpTurn, setPvpTurn] = useState<'p1' | 'p2'>('p1');
+  const [pvpRound, setPvpRound] = useState(1);
+  const [pvpWinner, setPvpWinner] = useState<string | null>(null);
+  const [wagerAmount, setWagerAmount] = useState(50);
 
-  // Character state with full inventory
-  const [ch, setCh] = useState(() => {
-    const base = CHAMPIONS['achilles'];
-    return {
-      name: base.name,
-      cls: base.cls,
-      element: base.homeElement,
-      level: 1,
-      attrs: { ...base.attrs },
-      maxAttrs: { ...base.max },
-      hp: 32,
-      mp: 15,
-      totalSR: 0,
-      walletSR: 0,
-      lives: 3,
-      equippedWeapon: null as ItemEntity | null,
-      equippedArmor: null as ItemEntity | null,
-      inventory: [] as ItemEntity[],
-      statuses: [] as string[]
-    };
-  });
-
-  const [fragments, setFragments] = useState<string[]>([]);
-  const [summons, setSummons] = useState<any[]>([]);
-  const [round, setRound] = useState(1);
-  const [isOver, setIsOver] = useState(false);
-  const [log, setLog] = useState<{ type: string; text: string; round: number }[]>([]);
-  const [tray, setTray] = useState<{ sides: number; value: number; label: string; group?: string }[]>([]);
-
-  // Enemy state
+  // PvE Monster State
   const [mob, setMob] = useState(() => {
     const b = BIOMES['pyria'];
     const name = MOBS['pyria']['easy'];
-    const mhp = tuning.mobHpBase + tuning.mobHpPerCr * 1;
-    const mdef = tuning.mobDefBase + Math.floor(1 / tuning.mobDefDiv);
+    const mhp = 15 + 8 * 1;
+    const mdef = 6 + Math.floor(1 / 2);
     return { name, biome: 'pyria', tier: 'easy', cr: 1, element: b.element, hp: mhp, maxHp: mhp, defense: mdef };
   });
+
+  const [isPveOver, setIsPveOver] = useState(false);
+  const [log, setLog] = useState<{ type: string; text: string; round: number }[]>([]);
+  const [tray, setTray] = useState<{ sides: number; value: number; label: string; group?: string }[]>([]);
+
+  // Hack Item Spawner Selection
+  const [selectedItemToSpawn, setSelectedItemToSpawn] = useState<string>(allItems[0]?.id || '');
+  const [hackSrAdd, setHackSrAdd] = useState<number>(100);
 
   const rngRef = useRef(createMulberry32(Date.now() % 100000));
 
   const addLog = (type: string, text: string) => {
-    setLog(prev => [...prev.slice(-90), { type, text, round }]);
+    setLog(prev => [...prev.slice(-90), { type, text, round: pvpRound }]);
   };
 
   const getProficiency = (lvl: number) => PROFICIENCY[Math.min(20, Math.max(1, lvl)) - 1];
 
-  const deriveStats = (character = ch) => {
-    const prof = getProficiency(character.level);
-    const m = (k: keyof typeof character.attrs) => character.attrs[k];
-    const armBonus = character.equippedArmor?.baseAc || 0;
-    return {
-      proficiency: prof,
-      maxHp: 20 + m('VIT') * (prof + 1) + m('STR') * 2,
-      maxMp: 10 + m('INT') * 5,
-      physDef: m('VIT') * 2 + armBonus,
-      magDef: m('INT') * 2,
-      speed: 1 + Math.floor(character.attrs.AGI / 5)
-    };
+  const getStatMod = (attrs: { STR: number; AGI: number; VIT: number; INT: number }, key?: string): number => {
+    if (key === 'AGI') return attrs.AGI;
+    if (key === 'VIT') return attrs.VIT;
+    if (key === 'INT') return attrs.INT;
+    return attrs.STR || 0;
   };
 
-  const derived = deriveStats(ch);
+  const deriveStats = (player: DuelistState) => {
+    const prof = getProficiency(player.level);
+    const m = (k: keyof typeof player.attrs) => player.attrs[k];
+    const armBonus = player.equippedArmor?.baseAc || 0;
+    const maxHp = 20 + m('VIT') * (prof + 1) + m('STR') * 2;
+    const maxMp = 10 + m('INT') * 5;
+    const physDef = m('VIT') * 2 + armBonus;
+    const magDef = m('INT') * 2;
+    const speed = 1 + Math.floor(player.attrs.AGI / 5);
 
-  // Reset Simulation (renamed from New Game)
-  const handleResetSimulation = () => {
-    rngRef.current = createMulberry32(Date.now() % 100000);
-    const base = CHAMPIONS[selectedChamp];
-    const prof = PROFICIENCY[0];
-    const maxHp = 20 + base.attrs.VIT * (prof + 1) + base.attrs.STR * 2;
-    const maxMp = 10 + base.attrs.INT * 5;
-
-    const newChar = {
-      name: base.name,
-      cls: base.cls,
-      element: base.homeElement,
-      level: 1,
-      attrs: { ...base.attrs },
-      maxAttrs: { ...base.max },
-      hp: maxHp,
-      mp: maxMp,
-      totalSR: 0,
-      walletSR: 0,
-      lives: 3,
-      equippedWeapon: null,
-      equippedArmor: null,
-      inventory: [
-        {
-          id: 'pot_hp_basic',
-          name: 'Basic Health Potion',
-          category: 'consumable' as const,
-          rarity: 'Common' as const,
-          biome: 'Universal' as const,
-          classReq: 'All' as const,
-          healHpPct: 25,
-          description: 'Restores 25% of Max HP.'
-        },
-        {
-          id: 'pot_mp_basic',
-          name: 'Basic Mana Potion',
-          category: 'consumable' as const,
-          rarity: 'Common' as const,
-          biome: 'Universal' as const,
-          classReq: 'All' as const,
-          restoreMpPct: 25,
-          description: 'Restores 25% of Max MP.'
-        }
-      ],
-      statuses: []
-    };
-
-    setCh(newChar);
-    setFragments([]);
-    setSummons([]);
-    setRound(1);
-    setTray([]);
-    setCurrentHand([]);
-    setActiveTraps([]);
-    setIsDefeatedModalOpen(false);
-    setLog([{ type: 'system', text: `Simulation reset: ${newChar.name} (${newChar.cls}).`, round: 1 }]);
-    spawnMonster(selectedBiome, selectedTier, cr);
+    return { proficiency: prof, maxHp, maxMp, physDef, magDef, speed };
   };
 
-  const spawnMonster = (biomeKey = selectedBiome, tierKey = selectedTier, crVal = cr) => {
-    const b = BIOMES[biomeKey];
-    const name = tierKey === 'guardian' ? b.guardian : MOBS[biomeKey][tierKey as 'easy' | 'medium' | 'hard'];
-    const mhp = tuning.mobHpBase + tuning.mobHpPerCr * crVal;
-    const mdef = tuning.mobDefBase + Math.floor(crVal / tuning.mobDefDiv);
+  const p1Derived = useMemo(() => deriveStats(p1), [p1.attrs, p1.level, p1.equippedArmor]);
+  const p2Derived = useMemo(() => deriveStats(p2), [p2.attrs, p2.level, p2.equippedArmor]);
 
-    setMob({
-      name,
-      biome: biomeKey,
-      tier: tierKey,
-      cr: crVal,
-      element: b.element,
-      hp: mhp,
-      maxHp: mhp,
-      defense: mdef
-    });
-    setIsOver(false);
-    setSummons([]);
-    addLog('system', `Encounter: ${name} (${biomeKey}, CR ${crVal}) blocks the path. HP ${mhp}, DEF ${mdef}.`);
-  };
+  // Sync HP / MP when max changes
+  useEffect(() => {
+    if (p1.hp > p1Derived.maxHp) setP1(p => ({ ...p, hp: p1Derived.maxHp, maxHp: p1Derived.maxHp }));
+    if (p1.mp > p1Derived.maxMp) setP1(p => ({ ...p, mp: p1Derived.maxMp, maxMp: p1Derived.maxMp }));
+  }, [p1Derived.maxHp, p1Derived.maxMp]);
 
-  // Turn Actions
-  const handlePlayerAttack = () => {
-    if (isOver || ch.hp <= 0) return;
-    const attackAttr = ch.cls === 'Prana' || ch.cls === 'Gana' ? 'INT' : 'STR';
-    const attrMod = ch.attrs[attackAttr as keyof typeof ch.attrs];
-    const prof = derived.proficiency;
+  useEffect(() => {
+    if (p2.hp > p2Derived.maxHp) setP2(p => ({ ...p, hp: p2Derived.maxHp, maxHp: p2Derived.maxHp }));
+    if (p2.mp > p2Derived.maxMp) setP2(p => ({ ...p, mp: p2Derived.maxMp, maxMp: p2Derived.maxMp }));
+  }, [p2Derived.maxHp, p2Derived.maxMp]);
 
-    const d1 = rngRef.current.roll(6);
-    const d2 = rngRef.current.roll(6);
-    const natural = d1 + d2;
-    const crit = natural === 12;
-    const autoMiss = natural === 2;
-    const totalHit = natural + attrMod + prof;
-    const hits = crit || (!autoMiss && totalHit >= mob.defense);
+  // --------------------------------------------------------------------------
+  // PvP Arena Action Handlers
+  // --------------------------------------------------------------------------
 
-    const hitRollTray = [
-      { sides: 6, value: d1, label: 'Attack Die 1', group: 'to hit' },
-      { sides: 6, value: d2, label: 'Attack Die 2', group: 'to hit' }
-    ];
-
-    if (!hits) {
-      setTray(hitRollTray);
-      addLog('attack', `${ch.name} ${autoMiss ? 'rolls natural 2' : 'misses'}: 2d6(${d1}+${d2}) +${attrMod} ${attackAttr} +${prof} prof = ${totalHit} vs DEF ${mob.defense}`);
-      afterPlayerTurn();
-      return;
-    }
-
-    const baseWeaponDmg = ch.equippedWeapon?.baseAtk || 5;
-    const dieSides = 20; // 1d20 damage roll
-    const rolledDmg = rngRef.current.roll(dieSides);
-    let dmg = Math.max(1, baseWeaponDmg + rolledDmg + attrMod);
-    if (crit) dmg *= 2;
-
-    const mult = getElementMultiplier(ch.element, mob.element);
-    const finalDmg = Math.max(1, Math.floor(dmg * mult));
-
-    setTray([
-      ...hitRollTray,
-      { sides: dieSides, value: rolledDmg, label: 'Damage d20', group: 'damage' }
-    ]);
-
-    const dMath = `Base ${baseWeaponDmg} + d20(${rolledDmg}) +${attrMod} ${attackAttr}${crit ? ' x2 CRIT' : ''}${mult !== 1 ? ` x${mult} element` : ''} = ${finalDmg}`;
-    addLog('attack', `${ch.name} ${crit ? 'CRITICAL HIT' : 'HITS'}: 2d6(${d1}+${d2}) = ${totalHit} vs DEF ${mob.defense}. Damage: ${dMath}`);
-
-    const newMobHp = Math.max(0, mob.hp - finalDmg);
-    setMob(prev => ({ ...prev, hp: newMobHp }));
-
-    if (newMobHp <= 0) {
-      handleVictory();
-    } else {
-      afterPlayerTurn();
-    }
-  };
-
-  const afterPlayerTurn = () => {
-    const behRoll = rngRef.current.roll(6);
-    const action = behRoll >= 6 ? 'ultimate' : behRoll >= 4 ? 'skill' : 'basic';
-
-    const e1 = rngRef.current.roll(6);
-    const e2 = rngRef.current.roll(6);
-    const eTotal = e1 + e2 + mob.cr;
-    const eHits = eTotal >= derived.physDef;
-
-    let eDmg = rngRef.current.roll(6) + mob.cr;
-    if (action === 'ultimate') eDmg = Math.floor(eDmg * 1.5);
-
-    if (summons.length > 0 && eHits) {
-      setSummons(prev => prev.slice(1));
-      addLog('enemy', `${mob.name} strikes for ${eDmg}, but a 1-HP Beast Familiar absorbs the entire blow! (Shatter mechanic)`);
-    } else if (eHits) {
-      const newChHp = Math.max(0, ch.hp - eDmg);
-      setCh(prev => ({ ...prev, hp: newChHp }));
-      addLog('enemy', `${mob.name} (${action}) hits for ${eDmg} damage! [2d6(${e1}+${e2}) +${mob.cr} vs DEF ${derived.physDef}].`);
-
-      if (newChHp <= 0) {
-        setIsDefeatedModalOpen(true);
-      }
-    } else {
-      addLog('enemy', `${mob.name} (${action}) misses [2d6(${e1}+${e2}) +${mob.cr} vs DEF ${derived.physDef}].`);
-    }
-
-    setRound(r => r + 1);
-  };
-
-  const handleVictory = () => {
-    const rewardSr = Math.min(10 * mob.cr, 3 * mob.cr + 21, mob.cr + 41);
-    addLog('loot', `★ ${mob.name} defeated! +${rewardSr} Total & Wallet SR awarded.`);
-
-    let nextTotal = ch.totalSR + rewardSr;
-    let nextLvl = 1;
-    while (nextLvl < 20 && nextTotal >= TOTAL_SR[nextLvl]) nextLvl++;
-
-    setCh(prev => ({
-      ...prev,
-      totalSR: nextTotal,
-      walletSR: prev.walletSR + rewardSr,
-      level: nextLvl
-    }));
-
-    setIsOver(true);
-  };
-
-  // Consumable Usage
-  const handleUseConsumable = (item: ItemEntity, index: number, asFreeTest: boolean = false) => {
-    let healHp = 0;
-    let restoreMp = 0;
-
-    if (item.healHpPct) healHp = Math.floor(derived.maxHp * (item.healHpPct / 100));
-    if (item.restoreMpPct) restoreMp = Math.floor(derived.maxMp * (item.restoreMpPct / 100));
-
-    setCh(prev => {
-      const newInv = [...prev.inventory];
-      newInv.splice(index, 1);
+  // Reset or initialize PvP match
+  const handleResetPvp = () => {
+    setP1(prev => {
+      const deck = shuffleCards(CLASS_PVP_DECKS[prev.cls] || CLASS_PVP_DECKS.Bhana);
       return {
         ...prev,
-        hp: Math.min(derived.maxHp, prev.hp + healHp),
-        mp: Math.min(derived.maxMp, prev.mp + restoreMp),
-        inventory: newInv
+        hp: p1Derived.maxHp,
+        mp: p1Derived.maxMp,
+        deck: deck.slice(3),
+        hand: deck.slice(0, 3),
+        discard: [],
+        traps: [],
+        summons: [],
+        shieldActive: false
       };
     });
 
-    addLog('system', `${ch.name} uses ${item.name} (${asFreeTest ? 'FREE TEST' : 'Turn Action'}): +${healHp} HP, +${restoreMp} MP.`);
+    setP2(prev => {
+      const deck = shuffleCards(CLASS_PVP_DECKS[prev.cls] || CLASS_PVP_DECKS.Cana);
+      return {
+        ...prev,
+        hp: p2Derived.maxHp,
+        mp: p2Derived.maxMp,
+        deck: deck.slice(3),
+        hand: deck.slice(0, 3),
+        discard: [],
+        traps: [],
+        summons: [],
+        shieldActive: false
+      };
+    });
 
-    if (!asFreeTest && !isOver) {
-      afterPlayerTurn();
+    setPvpTurn('p1');
+    setPvpRound(1);
+    setPvpWinner(null);
+    setTray([]);
+    addLog('system', `⚔ [PvP Reset] New Crucible Duel between ${p1.name} and ${p2.name} started.`);
+  };
+
+  // Pass / End Turn in PvP
+  const handleEndTurn = () => {
+    const isP1 = pvpTurn === 'p1';
+    const active = isP1 ? p1 : p2;
+    const setActive = isP1 ? setP1 : setP2;
+    const nextTurn = isP1 ? 'p2' : 'p1';
+
+    // Draw 1 card if deck has remaining cards
+    setActive(prev => {
+      if (prev.deck.length > 0) {
+        const [drawn, ...rest] = prev.deck;
+        addLog('system', `${prev.name} drew [${drawn.title}] at end of turn.`);
+        return {
+          ...prev,
+          hand: [...prev.hand, drawn],
+          deck: rest
+        };
+      } else {
+        addLog('system', `${prev.name}'s deck is exhausted! No cards drawn.`);
+        return prev;
+      }
+    });
+
+    if (!isP1) {
+      setPvpRound(r => r + 1);
+    }
+    setPvpTurn(nextTurn);
+    addLog('turn', `--- Turn passed to ${nextTurn === 'p1' ? p1.name : p2.name} ---`);
+  };
+
+  // Standard Basic Attack
+  const handleBasicAttack = (attackerKey: 'p1' | 'p2') => {
+    const isP1 = attackerKey === 'p1';
+    const attacker = isP1 ? p1 : p2;
+    const defender = isP1 ? p2 : p1;
+    const setDefender = isP1 ? setP2 : setP1;
+    const defStats = isP1 ? p2Derived : p1Derived;
+
+    const r1 = rngRef.current.roll(6);
+    const r2 = rngRef.current.roll(6);
+    const sum = r1 + r2;
+
+    const scaleStat = attacker.equippedWeapon?.scalingStat || 'STR';
+    const statMod = getStatMod(attacker.attrs, scaleStat);
+    const weaponDamage = attacker.equippedWeapon?.baseAtk || 2;
+    const totalAttack = sum + statMod;
+
+    setTray([
+      { sides: 6, value: r1, label: 'd6 A' },
+      { sides: 6, value: r2, label: 'd6 B' },
+      { sides: 20, value: totalAttack, label: 'Total Attack' }
+    ]);
+
+    addLog('attack', `⚔ ${attacker.name} strikes with basic attack! Rolled ${r1}+${r2} (+${statMod} ${scaleStat}) = ${totalAttack} vs ${defender.name}'s DEF ${defStats.physDef}.`);
+
+    // Check Defender's Face-Down Traps
+    if (defender.traps.length > 0) {
+      const trap = defender.traps[0];
+      setDefender(prev => ({
+        ...prev,
+        traps: prev.traps.slice(1),
+        discard: [...prev.discard, trap.card]
+      }));
+      addLog('trap', `🂠 [TRAP TRIGGERED] ${defender.name}'s face-down [${trap.card.title}] activates: "${trap.card.effect}"! Strike deflected!`);
+      handleEndTurn();
+      return;
+    }
+
+    // Check 1-HP Summons Shatter Rule
+    if (defender.summons.length > 0) {
+      setDefender(prev => ({ ...prev, summons: prev.summons.slice(1) }));
+      addLog('damage', `🛡 ${defender.name}'s 1-HP Familiar shatters! It completely absorbs the entire blow with 0 bleed-through!`);
+      handleEndTurn();
+      return;
+    }
+
+    if (totalAttack >= defStats.physDef) {
+      const netDamage = Math.max(1, (totalAttack - defStats.physDef) + weaponDamage);
+      const newHp = Math.max(0, defender.hp - netDamage);
+      setDefender(prev => ({ ...prev, hp: newHp }));
+      addLog('damage', `💥 Direct Hit! ${attacker.name} deals ${netDamage} physical damage to ${defender.name} (Remaining HP: ${newHp}/${defStats.maxHp}).`);
+
+      if (newHp <= 0) {
+        handleDuelVictory(attackerKey);
+        return;
+      }
+    } else {
+      addLog('combat', `🛡 Glancing blow! ${defender.name}'s armor deflects the strike completely.`);
+    }
+
+    handleEndTurn();
+  };
+
+  // Play Card from Hand
+  const handlePlayCard = (playerKey: 'p1' | 'p2', card: PvPCard, cardIdx: number) => {
+    const isP1 = playerKey === 'p1';
+    const player = isP1 ? p1 : p2;
+    const setPlayer = isP1 ? setP1 : setP2;
+    const target = isP1 ? p2 : p1;
+    const setTarget = isP1 ? setP2 : setP1;
+    const targetStats = isP1 ? p2Derived : p1Derived;
+
+    // Check MP if spell
+    if (card.type === 'Spell') {
+      const mpCost = 6;
+      if (player.mp < mpCost) {
+        addLog('warning', `❌ Not enough MP to cast [${card.title}]! Requires ${mpCost} MP.`);
+        return;
+      }
+      setPlayer(p => ({ ...p, mp: p.mp - mpCost }));
+    }
+
+    // Remove from hand and add to discard or trap field
+    setPlayer(p => ({
+      ...p,
+      hand: p.hand.filter((_, idx) => idx !== cardIdx),
+      discard: card.type !== 'Trap' ? [...p.discard, card] : p.discard,
+      traps: card.type === 'Trap' ? [...p.traps, { card, isRevealed: false }] : p.traps
+    }));
+
+    if (card.type === 'Trap') {
+      addLog('trap', `🂠 ${player.name} sets a secret card face-down onto the battlefield!`);
+      handleEndTurn();
+      return;
+    }
+
+    if (card.type === 'Attack') {
+      const r1 = rngRef.current.roll(6);
+      const r2 = rngRef.current.roll(6);
+      const scaleStat = player.cls === 'Cana' ? 'AGI' : player.cls === 'Prana' ? 'INT' : 'STR';
+      const mod = player.attrs[scaleStat];
+      const rollTotal = r1 + r2 + mod;
+
+      setTray([
+        { sides: 6, value: r1, label: 'd6 A' },
+        { sides: 6, value: r2, label: 'd6 B' },
+        { sides: 20, value: rollTotal, label: 'Card Attack' }
+      ]);
+
+      addLog('attack', `⚔ ${player.name} executes [${card.title}]! Roll: ${r1}+${r2} (+${mod} ${scaleStat}) = ${rollTotal} vs ${target.name}'s DEF ${targetStats.physDef}.`);
+
+      // Check Target Face-Down Traps
+      if (target.traps.length > 0) {
+        const triggered = target.traps[0];
+        setTarget(t => ({
+          ...t,
+          traps: t.traps.slice(1),
+          discard: [...t.discard, triggered.card]
+        }));
+        addLog('trap', `🂠 [TRAP SPRUNG] ${target.name}'s [${triggered.card.title}] triggers: "${triggered.card.effect}"! Attack countered!`);
+        handleEndTurn();
+        return;
+      }
+
+      // 1-HP token absorb
+      if (target.summons.length > 0) {
+        setTarget(t => ({ ...t, summons: t.summons.slice(1) }));
+        addLog('damage', `🛡 ${target.name}'s 1-HP Summon intercepts [${card.title}] and shatters with 0 bleed-through!`);
+        handleEndTurn();
+        return;
+      }
+
+      const rawDamage = Math.max(3, rollTotal - targetStats.physDef + 4);
+      const newHp = Math.max(0, target.hp - rawDamage);
+      setTarget(t => ({ ...t, hp: newHp }));
+      addLog('damage', `💥 [${card.title}] hits for ${rawDamage} damage! ${target.name} HP: ${newHp}/${targetStats.maxHp}.`);
+
+      if (newHp <= 0) {
+        handleDuelVictory(playerKey);
+        return;
+      }
+    }
+
+    if (card.type === 'Spell') {
+      addLog('spell', `✦ ${player.name} casts [${card.title}]: "${card.effect}"!`);
+
+      // If card mentions token/summon (e.g. Orpheus, Gana)
+      if (card.effect.toLowerCase().includes('familiar') || card.effect.toLowerCase().includes('token') || card.effect.toLowerCase().includes('decoy')) {
+        setPlayer(p => ({ ...p, summons: [...p.summons, { hp: 1 }] }));
+        addLog('system', `🛡 ${player.name} placed a 1-HP barrier token on the field.`);
+      }
+
+      // If card deals direct spell damage
+      if (card.effect.toLowerCase().includes('damage') || card.effect.toLowerCase().includes('burn') || card.effect.toLowerCase().includes('shock')) {
+        const spellDmg = Math.max(4, 6 + player.attrs.INT);
+        const newHp = Math.max(0, target.hp - spellDmg);
+        setTarget(t => ({ ...t, hp: newHp }));
+        addLog('damage', `⚡ Arcane surge deals ${spellDmg} magical damage to ${target.name}! HP: ${newHp}/${targetStats.maxHp}.`);
+        if (newHp <= 0) {
+          handleDuelVictory(playerKey);
+          return;
+        }
+      }
+    }
+
+    handleEndTurn();
+  };
+
+  // Victory Resolution
+  const handleDuelVictory = (victorKey: 'p1' | 'p2') => {
+    const victor = victorKey === 'p1' ? p1 : p2;
+    const loser = victorKey === 'p1' ? p2 : p1;
+    const pot = Math.min(wagerAmount, p1.walletSR) + Math.min(wagerAmount, p2.walletSR);
+
+    // Victor gets the wager pot into walletSR
+    if (victorKey === 'p1') {
+      setP1(p => ({ ...p, walletSR: p.walletSR + Math.min(wagerAmount, p2.walletSR) }));
+      setP2(p => ({ ...p, walletSR: Math.max(0, p.walletSR - Math.min(wagerAmount, p.walletSR)) }));
+    } else {
+      setP2(p => ({ ...p, walletSR: p.walletSR + Math.min(wagerAmount, p1.walletSR) }));
+      setP1(p => ({ ...p, walletSR: Math.max(0, p.walletSR - Math.min(wagerAmount, p.walletSR)) }));
+    }
+
+    setPvpWinner(victor.name);
+    addLog('system', `👑 [DUEL RESOLUTION] ${victor.name} emerged victorious! Claimed ${pot} Wallet SR pot from ${loser.name}. Campaign lives preserved (0 lost).`);
+  };
+
+  // GM Auto-Play Turn (Simulate AI for testing balance)
+  const handleAutoPlay = (playerKey: 'p1' | 'p2') => {
+    const isP1 = playerKey === 'p1';
+    const player = isP1 ? p1 : p2;
+
+    // 1. Play attack card if available
+    const attackIdx = player.hand.findIndex(c => c.type === 'Attack');
+    if (attackIdx >= 0) {
+      handlePlayCard(playerKey, player.hand[attackIdx], attackIdx);
+      return;
+    }
+
+    // 2. Play spell card if enough MP
+    const spellIdx = player.hand.findIndex(c => c.type === 'Spell');
+    if (spellIdx >= 0 && player.mp >= 6) {
+      handlePlayCard(playerKey, player.hand[spellIdx], spellIdx);
+      return;
+    }
+
+    // 3. Play trap card
+    const trapIdx = player.hand.findIndex(c => c.type === 'Trap');
+    if (trapIdx >= 0 && player.traps.length === 0) {
+      handlePlayCard(playerKey, player.hand[trapIdx], trapIdx);
+      return;
+    }
+
+    // 4. Default to basic attack
+    handleBasicAttack(playerKey);
+  };
+
+  // --------------------------------------------------------------------------
+  // PvE Monster Simulation Handlers
+  // --------------------------------------------------------------------------
+  const spawnMonster = (biomeKey: keyof typeof BIOMES, tierKey: 'easy' | 'medium' | 'hard' | 'guardian', targetCr: number) => {
+    const b = BIOMES[biomeKey];
+    const name = tierKey === 'guardian' ? `${b.guardian} (Guardian)` : MOBS[biomeKey][tierKey];
+    const mhp = 15 + 8 * targetCr;
+    const mdef = 6 + Math.floor(targetCr / 2);
+    setMob({ name, biome: biomeKey, tier: tierKey, cr: targetCr, element: b.element, hp: mhp, maxHp: mhp, defense: mdef });
+    setIsPveOver(false);
+    addLog('system', `⚔ Encampment encountered: [CR ${targetCr} ${tierKey.toUpperCase()}] ${name} (${b.element.toUpperCase()}) in ${b.name}.`);
+  };
+
+  const handlePveAttack = () => {
+    if (isPveOver || p1.hp <= 0) return;
+    const r1 = rngRef.current.roll(6);
+    const r2 = rngRef.current.roll(6);
+    const sum = r1 + r2;
+    const scaleStat = p1.equippedWeapon?.scalingStat || 'STR';
+    const statMod = getStatMod(p1.attrs, scaleStat);
+    const totalAtk = sum + statMod;
+
+    setTray([
+      { sides: 6, value: r1, label: 'd6 A' },
+      { sides: 6, value: r2, label: 'd6 B' },
+      { sides: 20, value: totalAtk, label: 'Player Attack' }
+    ]);
+
+    addLog('attack', `⚔ ${p1.name} strikes with 2d6 + ${statMod} (${scaleStat}) = ${totalAtk} vs Mob Defense ${mob.defense}.`);
+
+    if (totalAtk >= mob.defense) {
+      const dmg = Math.max(1, (totalAtk - mob.defense) + (p1.equippedWeapon?.baseAtk || 3));
+      const mult = getElementMultiplier(p1.element.toLowerCase(), mob.element.toLowerCase());
+      const finalDmg = Math.round(dmg * mult);
+
+      const newHp = Math.max(0, mob.hp - finalDmg);
+      setMob(m => ({ ...m, hp: newHp }));
+      addLog('damage', `💥 Direct Hit! Dealt ${finalDmg} damage to ${mob.name} (${newHp}/${mob.maxHp} HP).`);
+
+      if (newHp <= 0) {
+        setIsPveOver(true);
+        const rewardSr = Math.min(10 * mob.cr, 3 * mob.cr + 21, mob.cr + 41);
+        setP1(p => ({ ...p, walletSR: p.walletSR + rewardSr, totalSR: p.totalSR + rewardSr }));
+        addLog('loot', `🎉 ${mob.name} slain! Awarded ${rewardSr} SR.`);
+        return;
+      }
+    } else {
+      addLog('combat', `🛡 Miss! ${mob.name} evaded or deflected the blow.`);
+    }
+
+    // Mob counter-attacks
+    setTimeout(() => {
+      const mobDmg = Math.max(2, mob.cr * 2 + 1);
+      const newHp = Math.max(0, p1.hp - mobDmg);
+      setP1(p => ({ ...p, hp: newHp }));
+      addLog('damage', `🩸 ${mob.name} counter-attacks for ${mobDmg} damage! ${p1.name} HP: ${newHp}/${p1Derived.maxHp}.`);
+      if (newHp <= 0) {
+        setIsDefeatedModalOpen(true);
+      }
+    }, 300);
+  };
+
+  // --------------------------------------------------------------------------
+  // Inventory & Consumable Handlers (Applicable to P1 or P2)
+  // --------------------------------------------------------------------------
+  const handleUseConsumable = (targetKey: 'p1' | 'p2', item: ItemEntity, itemIdx: number, consumesTurn: boolean) => {
+    const isP1 = targetKey === 'p1';
+    const player = isP1 ? p1 : p2;
+    const setPlayer = isP1 ? setP1 : setP2;
+    const stats = isP1 ? p1Derived : p2Derived;
+
+    let healVal = 0;
+    let restoreMp = 0;
+
+    if (item.healHpPct) {
+      healVal = Math.round((stats.maxHp * item.healHpPct) / 100);
+    }
+    if (item.restoreMpPct) {
+      restoreMp = Math.round((stats.maxMp * item.restoreMpPct) / 100);
+    }
+
+    setPlayer(p => ({
+      ...p,
+      hp: Math.min(stats.maxHp, p.hp + healVal),
+      mp: Math.min(stats.maxMp, p.mp + restoreMp),
+      inventory: p.inventory.filter((_, idx) => idx !== itemIdx)
+    }));
+
+    addLog('item', `🧪 ${player.name} consumed [${item.name}]! Restored +${healVal} HP, +${restoreMp} MP. (${consumesTurn ? 'Turn Consumed' : 'Test Sandbox: 0 Turn Cost'})`);
+
+    if (consumesTurn && analyticsMode === 'pvp' && pvpTurn === targetKey) {
+      handleEndTurn();
     }
   };
 
-  // Equip Item from Inventory
-  const handleEquipItem = (item: ItemEntity, index: number) => {
-    setCh(prev => {
-      const newInv = [...prev.inventory];
-      newInv.splice(index, 1);
+  const handleEquipItem = (targetKey: 'p1' | 'p2', item: ItemEntity, itemIdx: number) => {
+    const isP1 = targetKey === 'p1';
+    const setPlayer = isP1 ? setP1 : setP2;
 
+    setPlayer(prev => {
+      const newInv = prev.inventory.filter((_, i) => i !== itemIdx);
       if (item.category === 'weapon') {
         if (prev.equippedWeapon) newInv.push(prev.equippedWeapon);
         return { ...prev, equippedWeapon: item, inventory: newInv };
@@ -407,949 +650,982 @@ export const BalanceAnalytics: React.FC<Props> = ({ allItems = [] }) => {
       }
       return prev;
     });
-    addLog('system', `${ch.name} equips ${item.name}.`);
+
+    addLog('equipment', `🛡 Equipped [${item.name}] onto ${targetKey === 'p1' ? p1.name : p2.name}.`);
   };
 
-  // Unequip item back to inventory
-  const handleUnequipItem = (category: 'weapon' | 'armor') => {
-    setCh(prev => {
-      const newInv = [...prev.inventory];
-      if (category === 'weapon' && prev.equippedWeapon) {
-        newInv.push(prev.equippedWeapon);
-        addLog('system', `Unequipped ${prev.equippedWeapon.name}.`);
-        return { ...prev, equippedWeapon: null, inventory: newInv };
-      } else if (category === 'armor' && prev.equippedArmor) {
-        newInv.push(prev.equippedArmor);
-        addLog('system', `Unequipped ${prev.equippedArmor.name}.`);
-        return { ...prev, equippedArmor: null, inventory: newInv };
-      }
-      return prev;
+  const handleUnequipItem = (targetKey: 'p1' | 'p2', slot: 'weapon' | 'armor') => {
+    const isP1 = targetKey === 'p1';
+    const setPlayer = isP1 ? setP1 : setP2;
+
+    setPlayer(prev => {
+      const item = slot === 'weapon' ? prev.equippedWeapon : prev.equippedArmor;
+      if (!item) return prev;
+      return {
+        ...prev,
+        [slot === 'weapon' ? 'equippedWeapon' : 'equippedArmor']: null,
+        inventory: [...prev.inventory, item]
+      };
     });
+    addLog('equipment', `Unequipped ${slot} from ${targetKey === 'p1' ? p1.name : p2.name}.`);
   };
 
-  // Draw 3-Card Hand for 9-Card Crucible Format
-  const handleDrawHand = () => {
-    const deck = CLASS_PVP_DECKS[ch.cls] || CLASS_PVP_DECKS['Bhana'];
-    // Shuffle and pick 3 cards
-    const shuffled = [...deck].sort(() => 0.5 - Math.random());
-    setCurrentHand(shuffled.slice(0, 3));
-    addLog('system', `${ch.name} draws 3 starting cards for the 9-Card Crucible Format.`);
+  const handleSpawnItemIntoPlayer = (targetKey: 'p1' | 'p2') => {
+    const found = allItems.find(i => i.id === selectedItemToSpawn) || allItems[0];
+    if (!found) return;
+
+    const setPlayer = targetKey === 'p1' ? setP1 : setP2;
+    setPlayer(p => ({ ...p, inventory: [...p.inventory, found] }));
+    addLog('loot', `🎁 GM spawned [${found.name}] into ${targetKey === 'p1' ? p1.name : p2.name}'s inventory.`);
   };
 
-  const handlePlayCard = (card: PvPCard, idx: number) => {
-    setCurrentHand(prev => prev.filter((_, i) => i !== idx));
-
-    if (card.type === 'Trap') {
-      setActiveTraps(prev => [...prev, card]);
-      addLog('attack', `${ch.name} places a Face-Down Trap: [${card.title}] on the board.`);
+  // Change Champion Preset for P1 or P2
+  const handleChangeChampionPreset = (targetKey: 'p1' | 'p2', champKey: keyof typeof CHAMPIONS) => {
+    const newDuelist = createDuelist(champKey, targetKey === 'p1' ? p1.walletSR : p2.walletSR);
+    if (targetKey === 'p1') {
+      setP1(newDuelist);
     } else {
-      addLog('attack', `${ch.name} plays ${card.type} Card: ${card.title} — "${card.effect}"`);
-      if (card.type === 'Attack' && !isOver) {
-        const dmg = 8 + (card.range ? card.range * 2 : 6);
-        setMob(m => ({ ...m, hp: Math.max(0, m.hp - dmg) }));
-        addLog('attack', `Card Attack lands for ${dmg} damage to ${mob.name}!`);
-        afterPlayerTurn();
-      }
+      setP2(newDuelist);
     }
+    addLog('system', `Switched ${targetKey.toUpperCase()} preset to ${newDuelist.name} (${newDuelist.cls}).`);
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0c100e] text-[#ece3c8] overflow-hidden">
-      {/* Top Setup Strip (Seed Removed, Reset Simulation button) */}
-      <div className="px-6 py-3 bg-[#141e18] border-b border-[#2e3f36] flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3 flex-wrap text-xs">
-          <div>
-            <label className="text-[10px] text-stone-400 uppercase font-bold block">Champion</label>
-            <select
-              value={selectedChamp}
-              onChange={e => {
-                const k = e.target.value as any;
-                setSelectedChamp(k);
-                const base = CHAMPIONS[k as keyof typeof CHAMPIONS];
-                setCh(c => ({
-                  ...c,
-                  name: base.name,
-                  cls: base.cls,
-                  element: base.homeElement,
-                  attrs: { ...base.attrs },
-                  maxAttrs: { ...base.max }
-                }));
-              }}
-              className="bg-[#1b2b22] border border-[#2e4235] rounded px-2 py-1 text-stone-100"
+    <div className="h-full flex flex-col bg-[#0b100d] text-stone-200 overflow-hidden font-sans">
+      {/* Top Navigation & Mode Switcher */}
+      <div className="p-3 bg-[#111a14] border-b border-[#233529] flex flex-wrap items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-3">
+          <h1 className="text-base font-bold text-amber-400 font-display flex items-center gap-2">
+            📊 Combat Balance Analytics
+          </h1>
+
+          {/* Mode Switcher Tabs */}
+          <div className="flex items-center p-1 bg-[#0b120e] rounded-xl border border-[#233529]">
+            <button
+              onClick={() => setAnalyticsMode('pve')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${analyticsMode === 'pve' ? 'bg-amber-500 text-black shadow-md' : 'text-stone-400 hover:text-stone-200'}`}
             >
-              {Object.entries(CHAMPIONS).map(([k, c]) => (
-                <option key={k} value={k}>{c.name} ({c.cls})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-[10px] text-stone-400 uppercase font-bold block">Biome</label>
-            <select
-              value={selectedBiome}
-              onChange={e => {
-                const b = e.target.value as any;
-                setSelectedBiome(b);
-                spawnMonster(b, selectedTier, cr);
-              }}
-              className="bg-[#1b2b22] border border-[#2e4235] rounded px-2 py-1 text-stone-100"
+              ⚔ PvE Monster Encounter
+            </button>
+            <button
+              onClick={() => setAnalyticsMode('pvp')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${analyticsMode === 'pvp' ? 'bg-amber-500 text-black shadow-md' : 'text-stone-400 hover:text-stone-200'}`}
             >
-              {Object.entries(BIOMES).map(([k, b]) => (
-                <option key={k} value={k}>{b.name} ({b.element})</option>
-              ))}
-            </select>
+              🤺 PvP Crucible Duel Arena
+            </button>
           </div>
-
-          <div>
-            <label className="text-[10px] text-stone-400 uppercase font-bold block">Monster</label>
-            <select
-              value={selectedTier}
-              onChange={e => {
-                const t = e.target.value as any;
-                setSelectedTier(t);
-                const newCr = TIER_CR[t];
-                setCr(newCr);
-                spawnMonster(selectedBiome, t, newCr);
-              }}
-              className="bg-[#1b2b22] border border-[#2e4235] rounded px-2 py-1 text-stone-100"
-            >
-              <option value="easy">Easy (CR 1)</option>
-              <option value="medium">Medium (CR 4)</option>
-              <option value="hard">Hard (CR 8)</option>
-              <option value="guardian">Guardian (CR 12)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-[10px] text-stone-400 uppercase font-bold block">CR (1–20)</label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={cr}
-              onChange={e => {
-                const v = Math.max(1, Math.min(20, +e.target.value));
-                setCr(v);
-                spawnMonster(selectedBiome, selectedTier, v);
-              }}
-              className="w-16 bg-[#1b2b22] border border-[#2e4235] rounded px-2 py-1 text-stone-100 font-mono-nums"
-            />
-          </div>
-
-          <button
-            onClick={handleResetSimulation}
-            className="px-3.5 py-1.5 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold mt-3.5 shadow-sm"
-          >
-            Reset Simulation
-          </button>
-          <button
-            onClick={() => setCh(c => ({ ...c, walletSR: c.walletSR + 50, totalSR: c.totalSR + 50 }))}
-            className="px-2.5 py-1.5 rounded bg-[#22332a] hover:bg-[#2e4438] text-amber-300 border border-[#3d5446] mt-3.5 font-mono-nums"
-          >
-            +50 SR
-          </button>
         </div>
 
+        {/* Action Controls */}
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsDeckViewerOpen(!isDeckViewerOpen)}
-            className="px-3 py-1.5 rounded-lg bg-[#203227] hover:bg-[#2b4234] text-purple-300 border border-purple-500/40 text-xs font-semibold"
+            onClick={() => {
+              setHackTarget(analyticsMode === 'pvp' && pvpTurn === 'p2' ? 'p2' : 'p1');
+              setIsHackModalOpen(true);
+            }}
+            className="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-md flex items-center gap-1.5"
           >
-            🎴 9-Card Crucible Deck
+            🛠 Hack Current Match
           </button>
           <button
-            onClick={() => setIsHackModalOpen(true)}
-            className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 text-xs font-bold"
+            onClick={analyticsMode === 'pvp' ? handleResetPvp : () => spawnMonster(selectedBiome, selectedTier, cr)}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#192720] hover:bg-[#22352b] text-stone-300 border border-[#2f4437]"
           >
-            ⚡ Hack Current Match
-          </button>
-          <button
-            onClick={() => setIsTuningPanelOpen(true)}
-            className="px-3 py-1.5 rounded-lg bg-[#1a2820] hover:bg-[#23352b] text-teal-300 border border-[#2e4235] text-xs font-semibold"
-          >
-            ⚙ GM Math Tuning
+            ↺ Reset Simulation
           </button>
         </div>
       </div>
 
-      {/* Main 3-Column Fighting Sandbox */}
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 overflow-hidden">
-        {/* Column 1: Character & Soul Corridor */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
-          {/* Character Card */}
-          <div className="p-4 rounded-xl bg-[#141f19] border border-[#26382e] space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-base text-amber-400 font-display">
-                {ch.name}
-              </span>
-              <span className="text-xs text-stone-400">
-                {ch.cls} · Lv {ch.level} · {ch.element}
-              </span>
-            </div>
-
-            <div className="space-y-1.5 text-xs font-mono-nums">
-              <div className="flex justify-between">
-                <span>HP: {ch.hp} / {derived.maxHp}</span>
-                <span className="text-red-400">Lives: {'♥'.repeat(ch.lives)}</span>
+      {/* Main Simulation Viewport */}
+      <div className="flex-1 overflow-hidden p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+        {/* LEFT PANEL: Combatant 1 (Player 1 / Challenger) */}
+        <div className="lg:col-span-4 flex flex-col gap-3 overflow-y-auto pr-1">
+          <div className={`p-4 rounded-xl bg-[#121c16] border transition-all ${analyticsMode === 'pvp' && pvpTurn === 'p1' ? 'border-amber-400 ring-2 ring-amber-400/20 shadow-lg' : 'border-[#233529]'}`}>
+            {/* Player 1 Header */}
+            <div className="flex justify-between items-center mb-2">
+              <div>
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest font-mono-nums">
+                  Player 1 · {p1.cls}
+                </span>
+                <h2 className="text-base font-bold text-stone-100 font-display">
+                  {p1.name}
+                </h2>
               </div>
-              <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
-                <div className="bg-red-500 h-full transition-all" style={{ width: `${(ch.hp / derived.maxHp) * 100}%` }} />
-              </div>
-
-              <div className="flex justify-between pt-1">
-                <span>MP: {ch.mp} / {derived.maxMp}</span>
-                <span>Speed: {derived.speed} tiles</span>
-              </div>
-              <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
-                <div className="bg-sky-500 h-full transition-all" style={{ width: `${(ch.mp / derived.maxMp) * 100}%` }} />
+              <div className="text-right">
+                <span className="text-xs font-mono-nums font-bold text-emerald-400 block">
+                  {p1.hp} / {p1Derived.maxHp} HP
+                </span>
+                <span className="text-[11px] font-mono-nums text-sky-400">
+                  {p1.mp} / {p1Derived.maxMp} MP
+                </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs font-mono-nums">
+            {/* Health & Mana Bars */}
+            <div className="space-y-1.5 mb-3">
+              <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, (p1.hp / p1Derived.maxHp) * 100)}%` }}
+                />
+              </div>
+              <div className="w-full h-1.5 bg-[#090e0b] rounded-full overflow-hidden">
+                <div
+                  className="bg-sky-500 h-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, (p1.mp / p1Derived.maxMp) * 100)}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Attributes Grid with Tooltips */}
+            <div className="grid grid-cols-4 gap-1.5 text-center text-xs font-mono-nums mb-3">
               {(['STR', 'AGI', 'VIT', 'INT'] as const).map(k => (
-                <div key={k} className="p-2 rounded bg-[#0e1612] border border-[#202e26]">
-                  <div className="flex justify-between text-stone-400 text-[10px]">
-                    <span>{k}</span>
-                    <span>max {ch.maxAttrs[k]}</span>
-                  </div>
-                  <div className="text-sm font-bold text-stone-100">{ch.attrs[k]}</div>
+                <div key={k} className="p-1.5 rounded bg-[#0d1410] border border-[#1e2f25]">
+                  <span className="text-[10px] text-stone-400 block">{k}</span>
+                  <span className="font-bold text-amber-300">{p1.attrs[k]}</span>
                 </div>
               ))}
             </div>
 
-            <div className="grid grid-cols-2 gap-2 p-2 rounded bg-[#090e0b] text-[11px] font-mono-nums text-stone-400">
-              <div>Proficiency: <b className="text-stone-200">+{derived.proficiency}</b></div>
-              <div>Phys DEF: <b className="text-amber-300">{derived.physDef}</b></div>
-              <div>Weapon ATK: <b className="text-red-300">{ch.equippedWeapon?.baseAtk || 5}</b></div>
-              <div>Keys: <b className="text-teal-400">{fragments.length}/4</b></div>
+            {/* Derived Defenses & Speed */}
+            <div className="flex justify-between text-[11px] text-stone-400 font-mono-nums pb-2 border-b border-[#1b2b21] mb-3">
+              <span>Phys DEF: <b className="text-stone-200">{p1Derived.physDef}</b></span>
+              <span>Mag DEF: <b className="text-stone-200">{p1Derived.magDef}</b></span>
+              <span>Speed: <b className="text-stone-200">{p1Derived.speed}</b></span>
+              <span>Wallet: <b className="text-amber-400">{p1.walletSR} SR</b></span>
             </div>
+
+            {/* Equipped Gear Slots */}
+            <div className="text-xs space-y-1 mb-3">
+              <div className="flex justify-between items-center p-1.5 rounded bg-[#0b120e] border border-[#1f3025]">
+                <span className="text-stone-400 text-[11px]">Weapon:</span>
+                <span className="font-semibold text-amber-300 text-[11px] truncate max-w-[160px]">
+                  {p1.equippedWeapon ? p1.equippedWeapon.name : 'Unarmed (2d6+STR)'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-1.5 rounded bg-[#0b120e] border border-[#1f3025]">
+                <span className="text-stone-400 text-[11px]">Armor:</span>
+                <span className="font-semibold text-emerald-300 text-[11px] truncate max-w-[160px]">
+                  {p1.equippedArmor ? p1.equippedArmor.name : 'Cloth Garb (+0 AC)'}
+                </span>
+              </div>
+            </div>
+
+            {/* Summons and Traps (PvP) */}
+            {analyticsMode === 'pvp' && (
+              <div className="space-y-1.5 pt-2 border-t border-[#1b2b21]">
+                <div className="flex justify-between items-center text-[11px]">
+                  <span className="text-stone-400">Summon Tokens:</span>
+                  <span className="font-mono-nums text-purple-300 font-bold">
+                    {p1.summons.length} {p1.summons.length > 0 ? '(Absorbs Hit)' : 'None'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-[11px]">
+                  <span className="text-stone-400">Face-Down Traps:</span>
+                  <span className="font-mono-nums text-purple-300 font-bold">
+                    {p1.traps.length} hidden
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Soul Corridor Shop */}
-          <div className="p-4 rounded-xl bg-[#141f19] border border-[#26382e] space-y-2.5">
-            <div className="flex items-center justify-between pb-2 border-b border-[#202e26]">
-              <span className="text-xs font-bold text-amber-400 uppercase tracking-wide font-display">
-                Soul Corridor Shop
+          {/* Player 1 Inventory & Consumables Quick Strip */}
+          <div className="p-3 rounded-xl bg-[#121c16] border border-[#233529] space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-amber-400 uppercase tracking-wide">
+                {p1.name}'s Bag ({p1.inventory.length})
               </span>
-              <span className="text-xs font-mono-nums text-amber-300 font-bold">
-                {ch.walletSR} Wallet SR
-              </span>
+              <button
+                onClick={() => {
+                  setDeckViewerTarget('p1');
+                  setIsDeckViewerOpen(true);
+                }}
+                className="text-[10px] text-sky-400 hover:underline"
+              >
+                Inspect 9-Card Deck ➔
+              </button>
             </div>
 
-            {(['STR', 'AGI', 'VIT', 'INT'] as const).map(k => {
-              const score = ch.attrs[k];
-              const cost = score * 6;
-              const atCap = score >= ch.maxAttrs[k];
-              return (
-                <div key={k} className="flex items-center justify-between text-xs p-2 rounded bg-[#0e1612] border border-[#202e26]">
-                  <div>
-                    <span className="font-bold text-stone-200">{k}</span>: {score} ➔ {score + 1}
+            {p1.inventory.length === 0 ? (
+              <span className="text-xs text-stone-500 italic">Inventory empty. Spawn items in Hack modal.</span>
+            ) : (
+              <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1">
+                {p1.inventory.map((item, idx) => (
+                  <div key={`${item.id}-${idx}`} className="p-2 rounded bg-[#0b120e] border border-[#1d2d23] flex items-center justify-between text-xs">
+                    <div className="truncate mr-2">
+                      <span className="font-bold text-stone-200 block truncate">{item.name}</span>
+                      <span className="text-[10px] text-stone-400">{item.category}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {item.category === 'consumable' ? (
+                        <>
+                          <button
+                            onClick={() => handleUseConsumable('p1', item, idx, true)}
+                            className="px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px]"
+                            title="Consume and pass turn"
+                          >
+                            Use
+                          </button>
+                          <button
+                            onClick={() => handleUseConsumable('p1', item, idx, false)}
+                            className="px-1.5 py-0.5 rounded bg-[#1e2f25] hover:bg-[#2a4033] text-stone-300 text-[10px]"
+                            title="Test item without consuming turn"
+                          >
+                            0-Turn
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleEquipItem('p1', item, idx)}
+                          className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-black font-bold text-[10px]"
+                        >
+                          Equip
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <button
-                    disabled={atCap || ch.walletSR < cost}
-                    onClick={() => {
-                      if (ch.walletSR < cost || atCap) return;
-                      const nextAttrs = { ...ch.attrs, [k]: ch.attrs[k] + 1 };
-                      const nextChar = { ...ch, attrs: nextAttrs, walletSR: ch.walletSR - cost };
-                      const oldD = deriveStats(ch);
-                      const newD = deriveStats(nextChar);
-                      nextChar.hp = ch.hp + (newD.maxHp - oldD.maxHp);
-                      nextChar.mp = ch.mp + (newD.maxMp - oldD.maxMp);
-                      setCh(nextChar);
-                      addLog('system', `Soul Corridor: Upgraded ${k} to ${nextAttrs[k]} for ${cost} SR.`);
-                    }}
-                    className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold disabled:opacity-40"
-                  >
-                    {atCap ? 'Max' : `${cost} SR`}
-                  </button>
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Column 2: Encounter, Equipment & Combat Actions */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
-          {/* Enemy Card */}
-          <div className="p-4 rounded-xl bg-[#141f19] border border-red-500/40 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-bold text-red-400 font-display text-base block">
-                  {mob.name}
-                </span>
-                <span className="text-xs text-stone-400">
-                  {mob.tier} · {mob.element}
-                </span>
+        {/* CENTER PANEL: Arena Battleground, Combat Actions & Dice Tray */}
+        <div className="lg:col-span-4 flex flex-col justify-between gap-3">
+          {/* Top Arena Info Banner */}
+          <div className="p-3 rounded-xl bg-[#142019] border border-[#273a30] text-center space-y-1">
+            {analyticsMode === 'pvp' ? (
+              <>
+                <div className="flex justify-between items-center text-xs font-mono-nums">
+                  <span className="text-amber-400 font-bold">Round {pvpRound}</span>
+                  <span className="text-stone-300">
+                    Active Turn: <b className="text-amber-300 uppercase">{pvpTurn === 'p1' ? p1.name : p2.name}</b>
+                  </span>
+                  <span className="text-emerald-400 font-bold">Pot: {wagerAmount * 2} SR</span>
+                </div>
+                {pvpWinner ? (
+                  <div className="p-2 bg-amber-500/20 border border-amber-400 rounded-lg text-amber-300 font-bold text-xs mt-1 animate-bounce">
+                    👑 {pvpWinner} Wins the Crucible Duel!
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-stone-400 mt-0.5">
+                    Deterministic 9-card decks · 1-HP summon shatter absorb enabled
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex justify-between items-center text-xs font-mono-nums">
+                <span className="text-amber-400 font-bold">PvE Zone: {BIOMES[selectedBiome].name}</span>
+                <span className="text-stone-300">CR {cr} ({selectedTier.toUpperCase()})</span>
+                <span className="text-emerald-400 font-bold">Loot Drop Ready</span>
               </div>
-              <span className="px-2 py-0.5 rounded bg-red-950 text-red-300 border border-red-800 text-xs font-bold">
-                CR {mob.cr}
-              </span>
-            </div>
-
-            <div className="space-y-1 text-xs font-mono-nums">
-              <div className="flex justify-between">
-                <span>HP: {mob.hp} / {mob.maxHp}</span>
-                <span>Defense: {mob.defense}</span>
-              </div>
-              <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
-                <div className="bg-red-600 h-full transition-all" style={{ width: `${(mob.hp / mob.maxHp) * 100}%` }} />
-              </div>
-            </div>
-
-            <div className="text-[11px] text-stone-400 flex justify-between font-mono-nums">
-              <span>Attack: +{mob.cr}</span>
-              <span>Damage: +{mob.cr}</span>
-              <span>Reward: {Math.min(10 * mob.cr, 3 * mob.cr + 21, mob.cr + 41)} SR</span>
-            </div>
+            )}
           </div>
 
-          {/* Combat Actions */}
-          <div className="p-4 rounded-xl bg-[#141f19] border border-[#26382e] space-y-3">
-            <span className="text-xs font-bold text-amber-400 uppercase tracking-wide font-display block">
-              Combat Actions
-            </span>
+          {/* ACTIVE CONTROLS FOR CURRENT PLAYER */}
+          <div className="p-4 rounded-xl bg-[#141f19] border border-[#273a30] space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-amber-400 uppercase tracking-wide font-display">
+                {analyticsMode === 'pvp'
+                  ? `${pvpTurn === 'p1' ? p1.name : p2.name}'s Actions`
+                  : `${p1.name}'s Actions`}
+              </span>
+              {analyticsMode === 'pvp' && !pvpWinner && (
+                <button
+                  onClick={() => handleAutoPlay(pvpTurn)}
+                  className="px-2 py-0.5 text-[10px] rounded bg-purple-900/60 text-purple-300 border border-purple-600/50 hover:bg-purple-800"
+                >
+                  ⚡ Auto-Play Turn
+                </button>
+              )}
+            </div>
 
+            {/* Primary Action Buttons */}
             <div className="grid grid-cols-2 gap-2">
               <button
-                disabled={isOver || ch.hp <= 0}
-                onClick={handlePlayerAttack}
-                className="py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs disabled:opacity-40"
+                disabled={analyticsMode === 'pvp' ? Boolean(pvpWinner) : (isPveOver || p1.hp <= 0)}
+                onClick={() => {
+                  if (analyticsMode === 'pvp') {
+                    handleBasicAttack(pvpTurn);
+                  } else {
+                    handlePveAttack();
+                  }
+                }}
+                className="py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs disabled:opacity-40 shadow"
               >
-                Attack (2d6 + Attr)
+                ⚔ Basic Attack (2d6)
               </button>
 
-              {ch.cls === 'Gana' && (
+              {analyticsMode === 'pvp' ? (
                 <button
-                  disabled={isOver || ch.mp < 10}
+                  disabled={Boolean(pvpWinner)}
+                  onClick={handleEndTurn}
+                  className="py-2.5 rounded-lg bg-[#1f3026] hover:bg-[#2a4234] text-stone-200 border border-[#334e3e] font-semibold text-xs"
+                >
+                  ⏭ Pass / End Turn
+                </button>
+              ) : (
+                <button
+                  disabled={isPveOver || p1.mp < 10}
                   onClick={() => {
-                    setCh(c => ({ ...c, mp: c.mp - 10 }));
-                    setSummons(s => [...s, { hp: 1 }]);
-                    addLog('attack', `${ch.name} calls a 1-HP Beast Familiar token!`);
-                    afterPlayerTurn();
+                    setP1(c => ({ ...c, mp: c.mp - 10, summons: [...c.summons, { hp: 1 }] }));
+                    addLog('spell', `${p1.name} conjured a 1-HP Beast Familiar (10 MP).`);
                   }}
-                  className="py-2.5 rounded-lg bg-[#22332a] hover:bg-[#2e4438] text-amber-300 border border-[#3d5446] font-semibold text-xs disabled:opacity-40"
+                  className="py-2.5 rounded-lg bg-[#1f3026] hover:bg-[#2a4234] text-amber-300 border border-[#334e3e] font-semibold text-xs disabled:opacity-40"
                 >
-                  Call Familiar (10 MP)
-                </button>
-              )}
-
-              {isOver && (
-                <button
-                  onClick={() => spawnMonster(selectedBiome, selectedTier, cr)}
-                  className="py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs col-span-2"
-                >
-                  Next Monster ➔
+                  🛡 Conjure Familiar (10 MP)
                 </button>
               )}
             </div>
 
-            {/* Visual Dice Tray */}
-            <div className="p-3 rounded-lg bg-[#0c120e] border border-[#202e26]">
-              <span className="text-[10px] text-stone-500 uppercase font-bold block mb-1.5">
-                Physical Dice Tray
-              </span>
-              <div className="flex gap-2 flex-wrap min-h-10 items-center">
-                {tray.map((die, idx) => (
-                  <div key={idx} className="flex flex-col items-center p-1.5 bg-[#17241d] border border-amber-500/40 rounded-lg min-w-10">
-                    <span className="text-[9px] text-stone-400 font-mono-nums">d{die.sides}</span>
-                    <span className="text-base font-bold text-amber-300 font-mono-nums">{die.value}</span>
-                    <span className="text-[8px] text-teal-400">{die.group}</span>
-                  </div>
-                ))}
-                {tray.length === 0 && <span className="text-xs text-stone-500 italic">No dice rolled this turn.</span>}
-              </div>
-            </div>
-          </div>
-
-          {/* Full Player Equipment & Inventory Management */}
-          <div className="p-4 rounded-xl bg-[#141f19] border border-[#26382e] space-y-3 text-xs">
-            <span className="font-bold text-amber-400 uppercase tracking-wide font-display block">
-              Equipped Loadout
-            </span>
-
-            {/* Equipped Slots */}
-            <div className="p-2.5 rounded bg-[#0e1612] border border-[#202e26] space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-stone-400 text-[10px] block">Weapon:</span>
-                  <b className="text-amber-300">{ch.equippedWeapon?.name || 'Unarmed Strike (Base 5)'}</b>
+            {/* Hand Cards (In PvP Mode, shows the active player's hand cards) */}
+            {analyticsMode === 'pvp' && (
+              <div className="space-y-1.5 pt-2 border-t border-[#1e2f25]">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-stone-300 font-bold">
+                    {pvpTurn === 'p1' ? p1.name : p2.name}'s Hand ({pvpTurn === 'p1' ? p1.hand.length : p2.hand.length}):
+                  </span>
+                  <span className="text-[10px] text-stone-500">
+                    Remaining Deck: {pvpTurn === 'p1' ? p1.deck.length : p2.deck.length}
+                  </span>
                 </div>
-                {ch.equippedWeapon && (
-                  <button
-                    onClick={() => handleUnequipItem('weapon')}
-                    className="px-2 py-0.5 rounded bg-[#203227] hover:bg-red-950/60 text-stone-300 hover:text-red-300 border border-[#32493a] text-[11px]"
-                  >
-                    Unequip
-                  </button>
-                )}
-              </div>
 
-              <div className="flex items-center justify-between pt-1 border-t border-[#1a2821]">
-                <div>
-                  <span className="text-stone-400 text-[10px] block">Armor:</span>
-                  <b className="text-emerald-300">{ch.equippedArmor?.name || 'Unarmored'}</b>
-                </div>
-                {ch.equippedArmor && (
-                  <button
-                    onClick={() => handleUnequipItem('armor')}
-                    className="px-2 py-0.5 rounded bg-[#203227] hover:bg-red-950/60 text-stone-300 hover:text-red-300 border border-[#32493a] text-[11px]"
-                  >
-                    Unequip
-                  </button>
-                )}
-              </div>
-            </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {(pvpTurn === 'p1' ? p1.hand : p2.hand).map((card, idx) => {
+                    const isAtk = card.type === 'Attack';
+                    const isSpell = card.type === 'Spell';
+                    const badgeBg = isAtk ? 'bg-red-950/60 text-red-300' : isSpell ? 'bg-sky-950/60 text-sky-300' : 'bg-purple-950/60 text-purple-300';
 
-            {/* Inventory List */}
-            <div className="space-y-1.5 pt-2 border-t border-[#202e26]">
-              <span className="text-[10px] text-stone-400 font-bold block uppercase tracking-wider">
-                Inventory Pack ({ch.inventory.length} items):
-              </span>
-
-              {ch.inventory.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between p-2 rounded bg-[#0e1612] border border-[#202e26]">
-                  <div>
-                    <span className="font-semibold text-stone-200">{item.name}</span>
-                    <span className="text-[10px] text-stone-400 block">{item.category} · {item.rarity}</span>
-                  </div>
-
-                  <div className="flex gap-1.5">
-                    {item.category === 'consumable' ? (
-                      <>
-                        <button
-                          disabled={isOver}
-                          onClick={() => handleUseConsumable(item, idx, false)}
-                          className="px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold disabled:opacity-40"
-                        >
-                          Drink (Turn)
-                        </button>
-                        <button
-                          onClick={() => handleUseConsumable(item, idx, true)}
-                          className="px-2 py-0.5 rounded bg-[#203227] hover:bg-[#2b4234] text-teal-300 border border-[#32493a] text-[11px]"
-                        >
-                          Test (Free)
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => handleEquipItem(item, idx)}
-                        className="px-2.5 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold text-[11px]"
+                    return (
+                      <div
+                        key={`${card.id}-${idx}`}
+                        className="p-2 rounded-lg bg-[#0d1611] border border-[#233529] hover:border-amber-400 transition-colors flex items-center justify-between text-xs"
                       >
-                        Equip
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                        <div className="truncate mr-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-stone-200">{card.title}</span>
+                            <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${badgeBg}`}>
+                              {card.type}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-stone-400 block truncate">{card.effect}</span>
+                        </div>
 
-              {ch.inventory.length === 0 && (
-                <p className="text-[11px] text-stone-500 italic p-2 text-center">
-                  Pack is empty. Use "Hack Current Match" to spawn any equipment!
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Column 3: Combat Event Log */}
-        <div className="flex flex-col p-4 rounded-xl bg-[#090e0b] border border-[#22332a] overflow-hidden">
-          <span className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2 font-display">
-            Action & Math Log (Round {round})
-          </span>
-          <div className="flex-1 overflow-y-auto space-y-1.5 text-xs font-mono-nums pr-1">
-            {log.map((entry, idx) => (
-              <div
-                key={idx}
-                className={`p-1.5 rounded border-l-2 leading-relaxed ${entry.type === 'attack' ? 'border-amber-400 bg-[#121c17]' : entry.type === 'enemy' ? 'border-red-500 bg-[#1c1212]' : entry.type === 'loot' ? 'border-teal-400 bg-[#101b1b]' : 'border-stone-600 bg-[#0f1411]'}`}
-              >
-                <span className="text-[10px] text-stone-500 mr-1.5">[R{entry.round}]</span>
-                {entry.text}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 9-Card Crucible Deck & Hand Viewer Modal */}
-      {isDeckViewerOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-[#141e18] p-6 rounded-2xl border border-purple-500/60 shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col gap-4">
-            <div className="flex justify-between items-center pb-2 border-b border-[#2e3f36]">
-              <div>
-                <h2 className="text-base font-bold text-purple-300 font-display">
-                  🎴 {ch.cls} 9-Card Crucible Format Deck (PvP System)
-                </h2>
-                <span className="text-xs text-stone-400">
-                  3 Attack Cards · 3 Spell Cards · 3 Trap Cards | 1-HP Shatter Rule
-                </span>
-              </div>
-              <button
-                onClick={() => setIsDeckViewerOpen(false)}
-                className="text-stone-400 hover:text-white text-xs px-2.5 py-1 rounded bg-[#22332a]"
-              >
-                Close
-              </button>
-            </div>
-
-            {/* Current Drawn Hand */}
-            <div className="p-3 bg-[#0d1410] rounded-xl border border-[#22332a]">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-amber-400 uppercase tracking-wide">
-                  Current Hand ({currentHand.length} cards)
-                </span>
-                <button
-                  onClick={handleDrawHand}
-                  className="px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold"
-                >
-                  Draw 3-Card Starting Hand
-                </button>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                {currentHand.map((card, idx) => (
-                  <div key={idx} className="p-2.5 rounded-lg bg-[#18261e] border border-purple-500/50 flex flex-col justify-between text-xs">
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-stone-100">{card.title}</span>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${card.type === 'Attack' ? 'bg-red-950 text-red-300' : card.type === 'Spell' ? 'bg-sky-950 text-sky-300' : 'bg-amber-950 text-amber-300'}`}>
-                          {card.type}
-                        </span>
+                        <button
+                          disabled={Boolean(pvpWinner)}
+                          onClick={() => handlePlayCard(pvpTurn, card, idx)}
+                          className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shrink-0"
+                        >
+                          Play
+                        </button>
                       </div>
-                      <p className="text-[11px] text-stone-300 leading-snug">{card.effect}</p>
-                    </div>
-                    <button
-                      onClick={() => handlePlayCard(card, idx)}
-                      className="mt-2 w-full py-1 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold text-[10px]"
-                    >
-                      {card.type === 'Trap' ? 'Set Face-Down' : 'Play Card'}
-                    </button>
-                  </div>
-                ))}
-                {currentHand.length === 0 && (
-                  <p className="text-xs text-stone-500 italic col-span-3 text-center py-4">
-                    Hand is empty. Click "Draw 3-Card Starting Hand" to test card combat.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Active Face-Down Traps */}
-            {activeTraps.length > 0 && (
-              <div className="p-2.5 bg-[#1b1522] rounded-lg border border-amber-500/40 text-xs">
-                <span className="font-bold text-amber-300 block mb-1">Active Set Traps (Face-Down):</span>
-                <div className="flex gap-2 flex-wrap">
-                  {activeTraps.map((t, i) => (
-                    <span key={i} className="px-2 py-1 rounded bg-amber-950 text-amber-300 border border-amber-700 text-[11px]">
-                      🔒 {t.title}
-                    </span>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* Full 9-Card Reference */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-              <span className="text-xs font-bold text-stone-400 uppercase tracking-wider block">
-                Class Deck Manifest ({CLASS_PVP_DECKS[ch.cls]?.length || 0} Cards):
+            {/* Visual Dice Tray */}
+            <div className="p-2.5 rounded-lg bg-[#0c120e] border border-[#202e26]">
+              <span className="text-[10px] text-stone-500 uppercase font-bold block mb-1">
+                Simulation Dice Tray
               </span>
-              <div className="grid grid-cols-3 gap-2">
-                {(CLASS_PVP_DECKS[ch.cls] || []).map(card => (
-                  <div key={card.id} className="p-2.5 rounded-lg bg-[#0e1612] border border-[#202e26] text-xs space-y-1">
-                    <div className="flex justify-between items-center">
-                      <b className="text-stone-200">{card.title}</b>
-                      <span className={`text-[9px] px-1 rounded ${card.type === 'Attack' ? 'text-red-400' : card.type === 'Spell' ? 'text-sky-400' : 'text-amber-400'}`}>
-                        {card.type}
-                      </span>
+              <div className="flex gap-2 min-h-[32px] items-center">
+                {tray.length === 0 ? (
+                  <span className="text-xs text-stone-600 italic">No recent roll</span>
+                ) : (
+                  tray.map((d, i) => (
+                    <div key={i} className="px-2.5 py-1 rounded bg-[#16241c] border border-amber-500/40 text-center font-mono-nums">
+                      <span className="text-xs font-bold text-amber-400 block">{d.value}</span>
+                      <span className="text-[8px] text-stone-400 uppercase">{d.label}</span>
                     </div>
-                    {card.range && <div className="text-[10px] text-teal-400">Range: {card.range} tiles</div>}
-                    <p className="text-[11px] text-stone-400 leading-relaxed">{card.effect}</p>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Defeat Resolution Modal */}
-      {isDefeatedModalOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-[#141e18] p-6 rounded-2xl border border-red-500/60 shadow-2xl max-w-md w-full space-y-4">
-            <h2 className="text-lg font-bold text-red-400 font-display">
-              💔 {ch.name} Has Fallen! (0 HP)
-            </h2>
-            <p className="text-xs text-stone-300">
-              The character is incapacitated. How would you like to resolve this defeat for testing?
-            </p>
-
-            <div className="space-y-2 pt-2">
-              <button
-                onClick={() => {
-                  setCh(c => ({ ...c, hp: derived.maxHp, mp: derived.maxMp }));
-                  setIsDefeatedModalOpen(false);
-                  addLog('system', `GM Revived ${ch.name} at full HP/MP.`);
-                }}
-                className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
-              >
-                Revive Here (Full HP/MP, Continue Fight)
-              </button>
-
-              <button
-                onClick={() => {
-                  const newLives = ch.lives - 1;
-                  const lostWallet = Math.floor(ch.walletSR * tuning.walletLossFraction);
-                  setCh(c => ({
-                    ...c,
-                    lives: Math.max(0, newLives),
-                    hp: derived.maxHp,
-                    mp: derived.maxMp,
-                    walletSR: c.walletSR - lostWallet
-                  }));
-                  setIsDefeatedModalOpen(false);
-                  spawnMonster(selectedBiome, selectedTier, cr);
-                  addLog('death', `Respawned at Start: Lost 1 Life (${newLives} left), lost ${lostWallet} SR.`);
-                }}
-                className="w-full py-2 rounded-lg bg-[#22332a] hover:bg-[#2e4438] text-amber-300 border border-[#3d5446] font-semibold text-xs"
-              >
-                Respawn at Start (Standard 3-Life Rule)
-              </button>
-
-              <button
-                onClick={() => {
-                  setIsDefeatedModalOpen(false);
-                  handleResetSimulation();
-                }}
-                className="w-full py-1.5 rounded-lg bg-[#1a2820] hover:bg-red-950 text-stone-400 hover:text-red-300 border border-[#2e4235] text-xs"
-              >
-                Full Wipe & Reset Simulation
-              </button>
-            </div>
+          {/* Combat Log Console */}
+          <div className="p-3 rounded-xl bg-[#0b120e] border border-[#1f2f25] flex-1 max-h-48 overflow-y-auto font-mono text-[11px] space-y-1">
+            <span className="text-[10px] text-stone-500 font-bold uppercase tracking-wider block">
+              Combat Feed
+            </span>
+            {log.length === 0 ? (
+              <span className="text-stone-600 italic">Battle started. Actions will stream here.</span>
+            ) : (
+              log.map((entry, i) => (
+                <div key={i} className="text-stone-300 leading-tight">
+                  <span className="text-stone-500 mr-1.5">[R{entry.round}]</span>
+                  {entry.text}
+                </div>
+              ))
+            )}
           </div>
         </div>
-      )}
 
-      {/* GM Match Hack / Combat Sandbox Modal (Includes Champion, Biome, Monster, CR, +SR, and Equipment Spawner) */}
+        {/* RIGHT PANEL: Combatant 2 (Player 2 in PvP, or Mob in PvE) */}
+        <div className="lg:col-span-4 flex flex-col gap-3 overflow-y-auto pl-1">
+          {analyticsMode === 'pvp' ? (
+            /* Player 2 (Defender / Rival) Display */
+            <>
+              <div className={`p-4 rounded-xl bg-[#121c16] border transition-all ${pvpTurn === 'p2' ? 'border-amber-400 ring-2 ring-amber-400/20 shadow-lg' : 'border-[#233529]'}`}>
+                {/* Player 2 Header */}
+                <div className="flex justify-between items-center mb-2">
+                  <div>
+                    <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest font-mono-nums">
+                      Player 2 · {p2.cls}
+                    </span>
+                    <h2 className="text-base font-bold text-stone-100 font-display">
+                      {p2.name}
+                    </h2>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-mono-nums font-bold text-emerald-400 block">
+                      {p2.hp} / {p2Derived.maxHp} HP
+                    </span>
+                    <span className="text-[11px] font-mono-nums text-sky-400">
+                      {p2.mp} / {p2Derived.maxMp} MP
+                    </span>
+                  </div>
+                </div>
+
+                {/* Health & Mana Bars */}
+                <div className="space-y-1.5 mb-3">
+                  <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, (p2.hp / p2Derived.maxHp) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="w-full h-1.5 bg-[#090e0b] rounded-full overflow-hidden">
+                    <div
+                      className="bg-sky-500 h-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, (p2.mp / p2Derived.maxMp) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Attributes Grid */}
+                <div className="grid grid-cols-4 gap-1.5 text-center text-xs font-mono-nums mb-3">
+                  {(['STR', 'AGI', 'VIT', 'INT'] as const).map(k => (
+                    <div key={k} className="p-1.5 rounded bg-[#0d1410] border border-[#1e2f25]">
+                      <span className="text-[10px] text-stone-400 block">{k}</span>
+                      <span className="font-bold text-sky-300">{p2.attrs[k]}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Derived Stats */}
+                <div className="flex justify-between text-[11px] text-stone-400 font-mono-nums pb-2 border-b border-[#1b2b21] mb-3">
+                  <span>Phys DEF: <b className="text-stone-200">{p2Derived.physDef}</b></span>
+                  <span>Mag DEF: <b className="text-stone-200">{p2Derived.magDef}</b></span>
+                  <span>Speed: <b className="text-stone-200">{p2Derived.speed}</b></span>
+                  <span>Wallet: <b className="text-amber-400">{p2.walletSR} SR</b></span>
+                </div>
+
+                {/* Equipped Gear Slots */}
+                <div className="text-xs space-y-1 mb-3">
+                  <div className="flex justify-between items-center p-1.5 rounded bg-[#0b120e] border border-[#1f3025]">
+                    <span className="text-stone-400 text-[11px]">Weapon:</span>
+                    <span className="font-semibold text-amber-300 text-[11px] truncate max-w-[160px]">
+                      {p2.equippedWeapon ? p2.equippedWeapon.name : 'Unarmed (2d6+STR)'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center p-1.5 rounded bg-[#0b120e] border border-[#1f3025]">
+                    <span className="text-stone-400 text-[11px]">Armor:</span>
+                    <span className="font-semibold text-emerald-300 text-[11px] truncate max-w-[160px]">
+                      {p2.equippedArmor ? p2.equippedArmor.name : 'Cloth Garb (+0 AC)'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Summons & Traps */}
+                <div className="space-y-1.5 pt-2 border-t border-[#1b2b21]">
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-stone-400">Summon Tokens:</span>
+                    <span className="font-mono-nums text-purple-300 font-bold">
+                      {p2.summons.length} {p2.summons.length > 0 ? '(Absorbs Hit)' : 'None'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-stone-400">Face-Down Traps:</span>
+                    <span className="font-mono-nums text-purple-300 font-bold">
+                      {p2.traps.length} hidden
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Player 2 Inventory */}
+              <div className="p-3 rounded-xl bg-[#121c16] border border-[#233529] space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-sky-400 uppercase tracking-wide">
+                    {p2.name}'s Bag ({p2.inventory.length})
+                  </span>
+                  <button
+                    onClick={() => {
+                      setDeckViewerTarget('p2');
+                      setIsDeckViewerOpen(true);
+                    }}
+                    className="text-[10px] text-sky-400 hover:underline"
+                  >
+                    Inspect 9-Card Deck ➔
+                  </button>
+                </div>
+
+                {p2.inventory.length === 0 ? (
+                  <span className="text-xs text-stone-500 italic">Inventory empty. Spawn items in Hack modal.</span>
+                ) : (
+                  <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1">
+                    {p2.inventory.map((item, idx) => (
+                      <div key={`${item.id}-${idx}`} className="p-2 rounded bg-[#0b120e] border border-[#1d2d23] flex items-center justify-between text-xs">
+                        <div className="truncate mr-2">
+                          <span className="font-bold text-stone-200 block truncate">{item.name}</span>
+                          <span className="text-[10px] text-stone-400">{item.category}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {item.category === 'consumable' ? (
+                            <>
+                              <button
+                                onClick={() => handleUseConsumable('p2', item, idx, true)}
+                                className="px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px]"
+                              >
+                                Use
+                              </button>
+                              <button
+                                onClick={() => handleUseConsumable('p2', item, idx, false)}
+                                className="px-1.5 py-0.5 rounded bg-[#1e2f25] hover:bg-[#2a4033] text-stone-300 text-[10px]"
+                              >
+                                0-Turn
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => handleEquipItem('p2', item, idx)}
+                              className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-black font-bold text-[10px]"
+                            >
+                              Equip
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            /* PvE Mob Display */
+            <div className="p-4 rounded-xl bg-[#121c16] border border-[#233529] space-y-3">
+              <div className="flex justify-between items-center">
+                <div>
+                  <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest font-mono-nums">
+                    CR {mob.cr} Monster · {mob.element.toUpperCase()}
+                  </span>
+                  <h2 className="text-base font-bold text-stone-100 font-display">
+                    {mob.name}
+                  </h2>
+                </div>
+                <span className="text-xs font-mono-nums font-bold text-red-400">
+                  {mob.hp} / {mob.maxHp} HP
+                </span>
+              </div>
+
+              <div className="w-full h-2 bg-[#090e0b] rounded-full overflow-hidden">
+                <div
+                  className="bg-red-500 h-full transition-all duration-300"
+                  style={{ width: `${(mob.hp / mob.maxHp) * 100}%` }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono-nums">
+                <div className="p-2 rounded bg-[#0d1410] border border-[#1e2f25]">
+                  <span className="text-[10px] text-stone-400 block">Defense (DV)</span>
+                  <span className="font-bold text-stone-200">{mob.defense}</span>
+                </div>
+                <div className="p-2 rounded bg-[#0d1410] border border-[#1e2f25]">
+                  <span className="text-[10px] text-stone-400 block">Element</span>
+                  <span className="font-bold text-amber-300 capitalize">{mob.element}</span>
+                </div>
+              </div>
+
+              {/* Monster Config Controls */}
+              <div className="space-y-2 pt-2 border-t border-[#1b2b21] text-xs">
+                <label className="text-stone-400 block text-[11px]">Spawn Biome</label>
+                <div className="grid grid-cols-3 gap-1">
+                  {(Object.keys(BIOMES) as (keyof typeof BIOMES)[]).map(bKey => (
+                    <button
+                      key={bKey}
+                      onClick={() => {
+                        setSelectedBiome(bKey);
+                        spawnMonster(bKey, selectedTier, cr);
+                      }}
+                      className={`py-1 rounded text-[11px] font-semibold transition-colors ${selectedBiome === bKey ? 'bg-amber-500 text-black' : 'bg-[#18261e] text-stone-300'}`}
+                    >
+                      {BIOMES[bKey].name}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex gap-2 items-center mt-2">
+                  <span className="text-[11px] text-stone-400">CR:</span>
+                  {[1, 4, 8, 12].map(cVal => (
+                    <button
+                      key={cVal}
+                      onClick={() => {
+                        setCr(cVal);
+                        spawnMonster(selectedBiome, selectedTier, cVal);
+                      }}
+                      className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${cr === cVal ? 'bg-amber-500 text-black' : 'bg-[#18261e] text-stone-400'}`}
+                    >
+                      {cVal}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* -------------------------------------------------------------------------- */}
+      {/* UNIVERSAL HACK CURRENT MATCH MODAL (DUAL-PLAYER GM CONTROL) */}
+      {/* -------------------------------------------------------------------------- */}
       {isHackModalOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#141e18] p-6 rounded-2xl border border-amber-500/50 shadow-2xl max-w-xl w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-2 border-b border-[#2e3f36]">
-              <h2 className="text-base font-bold text-amber-400 font-display">
-                ⚡ GM Match Hack & Combat Sandbox
-              </h2>
+          <div className="bg-[#121c16] p-6 rounded-2xl border border-emerald-500/50 shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto space-y-4">
+            {/* Modal Header & Target Switcher */}
+            <div className="flex justify-between items-center pb-2 border-b border-[#233529]">
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-bold text-emerald-400 font-display">
+                  🛠 Hack Current Match
+                </h2>
+
+                {/* Target Combatant Tabs */}
+                <div className="flex items-center p-0.5 bg-[#0a100d] rounded-lg border border-[#203025]">
+                  <button
+                    onClick={() => setHackTarget('p1')}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${hackTarget === 'p1' ? 'bg-emerald-600 text-white' : 'text-stone-400 hover:text-white'}`}
+                  >
+                    Player 1 ({p1.name})
+                  </button>
+                  <button
+                    onClick={() => setHackTarget('p2')}
+                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${hackTarget === 'p2' ? 'bg-sky-600 text-white' : 'text-stone-400 hover:text-white'}`}
+                  >
+                    Player 2 ({p2.name})
+                  </button>
+                  {analyticsMode === 'pve' && (
+                    <button
+                      onClick={() => setHackTarget('mob')}
+                      className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${hackTarget === 'mob' ? 'bg-red-600 text-white' : 'text-stone-400 hover:text-white'}`}
+                    >
+                      PvE Mob
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <button
                 onClick={() => setIsHackModalOpen(false)}
-                className="text-stone-400 hover:text-white text-xs px-2.5 py-1 rounded bg-[#22332a]"
+                className="text-stone-400 hover:text-white px-2 py-1 rounded bg-[#1e2f25] text-xs font-bold"
               >
-                Close
+                ✕ Close
               </button>
             </div>
 
-            {/* Quick Match Overrides: Champion, Biome, Monster, CR */}
-            <div className="p-3 bg-[#0d1410] rounded-xl border border-[#22332a] space-y-3">
-              <span className="text-xs font-bold text-amber-300 uppercase tracking-wide block">
-                Encounter & Champion Overrides
-              </span>
+            {/* HACKING PLAYER 1 OR PLAYER 2 */}
+            {(hackTarget === 'p1' || hackTarget === 'p2') && (() => {
+              const target = hackTarget === 'p1' ? p1 : p2;
+              const setTarget = hackTarget === 'p1' ? setP1 : setP2;
+              const targetDerived = hackTarget === 'p1' ? p1Derived : p2Derived;
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <div>
-                  <label className="text-stone-400 block mb-0.5">Champion</label>
-                  <select
-                    value={selectedChamp}
-                    onChange={e => {
-                      const k = e.target.value as any;
-                      setSelectedChamp(k);
-                      const base = CHAMPIONS[k as keyof typeof CHAMPIONS];
-                      setCh(c => ({
-                        ...c,
-                        name: base.name,
-                        cls: base.cls,
-                        element: base.homeElement,
-                        attrs: { ...base.attrs },
-                        maxAttrs: { ...base.max }
-                      }));
-                    }}
-                    className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1 text-stone-100"
-                  >
-                    {Object.entries(CHAMPIONS).map(([k, c]) => (
-                      <option key={k} value={k}>{c.name} ({c.cls})</option>
-                    ))}
-                  </select>
+              return (
+                <div className="space-y-4 text-xs font-mono-nums">
+                  {/* Archetype & Presets */}
+                  <div className="p-3 rounded-xl bg-[#0d1410] border border-[#203025] space-y-2">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wide block font-sans">
+                      Select Champion Archetype
+                    </span>
+                    <div className="grid grid-cols-4 gap-2">
+                      {(Object.keys(CHAMPIONS) as (keyof typeof CHAMPIONS)[]).map(cKey => (
+                        <button
+                          key={cKey}
+                          onClick={() => handleChangeChampionPreset(hackTarget, cKey)}
+                          className={`py-1.5 px-2 rounded-lg font-bold text-xs capitalize transition-colors ${target.name === CHAMPIONS[cKey].name ? 'bg-amber-500 text-black' : 'bg-[#18261e] text-stone-300 hover:bg-[#22352b]'}`}
+                        >
+                          {CHAMPIONS[cKey].name} ({CHAMPIONS[cKey].cls})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Attributes (STR, AGI, VIT, INT, Level) */}
+                  <div className="p-3 rounded-xl bg-[#0d1410] border border-[#203025] space-y-2">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wide block font-sans">
+                      Attributes & Level Scaling
+                    </span>
+                    <div className="grid grid-cols-5 gap-2">
+                      {(['STR', 'AGI', 'VIT', 'INT'] as const).map(k => (
+                        <div key={k}>
+                          <label className="text-stone-400 block mb-1">{k}</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={30}
+                            value={target.attrs[k]}
+                            onChange={e => setTarget({ ...target, attrs: { ...target.attrs, [k]: +e.target.value } })}
+                            className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="text-stone-400 block mb-1">Level</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={target.level}
+                          onChange={e => setTarget({ ...target, level: Math.max(1, +e.target.value) })}
+                          className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Vitals & Currency (HP, MP, Wallet SR, Lives) */}
+                  <div className="p-3 rounded-xl bg-[#0d1410] border border-[#203025] space-y-2">
+                    <div className="flex justify-between items-center font-sans">
+                      <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wide">
+                        Vitals & Currency
+                      </span>
+                      <button
+                        onClick={() => setTarget({ ...target, hp: targetDerived.maxHp, mp: targetDerived.maxMp })}
+                        className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px]"
+                      >
+                        ♥ Full Revive & Restore
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                      <div>
+                        <label className="text-stone-400 block mb-1">HP (Max: {targetDerived.maxHp})</label>
+                        <input
+                          type="number"
+                          value={target.hp}
+                          onChange={e => setTarget({ ...target, hp: +e.target.value })}
+                          className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-stone-400 block mb-1">MP (Max: {targetDerived.maxMp})</label>
+                        <input
+                          type="number"
+                          value={target.mp}
+                          onChange={e => setTarget({ ...target, mp: +e.target.value })}
+                          className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-stone-400 block mb-1">Wallet SR</label>
+                        <input
+                          type="number"
+                          value={target.walletSR}
+                          onChange={e => setTarget({ ...target, walletSR: +e.target.value })}
+                          className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-stone-400 block mb-1">Campaign Lives</label>
+                        <input
+                          type="number"
+                          value={target.lives}
+                          onChange={e => setTarget({ ...target, lives: +e.target.value })}
+                          className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-bold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Equipment Slots Management */}
+                  <div className="p-3 rounded-xl bg-[#0d1410] border border-[#203025] space-y-2 font-sans">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wide block">
+                      Equipped Items
+                    </span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="p-2 rounded bg-[#18261e] border border-[#25392d] flex justify-between items-center">
+                        <div>
+                          <span className="text-[10px] text-stone-400 block uppercase">Weapon</span>
+                          <span className="font-bold text-amber-300">
+                            {target.equippedWeapon ? target.equippedWeapon.name : 'None'}
+                          </span>
+                        </div>
+                        {target.equippedWeapon && (
+                          <button
+                            onClick={() => handleUnequipItem(hackTarget, 'weapon')}
+                            className="text-[10px] px-2 py-0.5 rounded bg-red-900/60 text-red-300 hover:bg-red-800"
+                          >
+                            Unequip
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="p-2 rounded bg-[#18261e] border border-[#25392d] flex justify-between items-center">
+                        <div>
+                          <span className="text-[10px] text-stone-400 block uppercase">Armor</span>
+                          <span className="font-bold text-emerald-300">
+                            {target.equippedArmor ? target.equippedArmor.name : 'None'}
+                          </span>
+                        </div>
+                        {target.equippedArmor && (
+                          <button
+                            onClick={() => handleUnequipItem(hackTarget, 'armor')}
+                            className="text-[10px] px-2 py-0.5 rounded bg-red-900/60 text-red-300 hover:bg-red-800"
+                          >
+                            Unequip
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Spawn Equipment Directly Into Inventory */}
+                  <div className="p-3 rounded-xl bg-[#0d1410] border border-[#203025] space-y-2 font-sans">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wide block">
+                      Spawn Equipment & Items into {target.name}'s Bag
+                    </span>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedItemToSpawn}
+                        onChange={e => setSelectedItemToSpawn(e.target.value)}
+                        className="flex-1 bg-[#1b2b22] border border-[#2e4235] rounded-lg p-2 text-xs text-stone-100"
+                      >
+                        {allItems.map(it => (
+                          <option key={it.id} value={it.id}>
+                            [{it.category.toUpperCase()}] {it.name} ({it.rarity})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleSpawnItemIntoPlayer(hackTarget)}
+                        className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs"
+                      >
+                        + Spawn Item
+                      </button>
+                    </div>
+                  </div>
                 </div>
+              );
+            })()}
 
-                <div>
-                  <label className="text-stone-400 block mb-0.5">Biome</label>
-                  <select
-                    value={selectedBiome}
-                    onChange={e => {
-                      const b = e.target.value as any;
-                      setSelectedBiome(b);
-                      spawnMonster(b, selectedTier, cr);
-                    }}
-                    className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1 text-stone-100"
-                  >
-                    {Object.entries(BIOMES).map(([k, b]) => (
-                      <option key={k} value={k}>{b.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-stone-400 block mb-0.5">Monster Tier</label>
-                  <select
-                    value={selectedTier}
-                    onChange={e => {
-                      const t = e.target.value as any;
-                      setSelectedTier(t);
-                      const newCr = TIER_CR[t];
-                      setCr(newCr);
-                      spawnMonster(selectedBiome, t, newCr);
-                    }}
-                    className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1 text-stone-100"
-                  >
-                    <option value="easy">Easy (CR 1)</option>
-                    <option value="medium">Medium (CR 4)</option>
-                    <option value="hard">Hard (CR 8)</option>
-                    <option value="guardian">Guardian (CR 12)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-stone-400 block mb-0.5">Monster CR</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={cr}
-                    onChange={e => {
-                      const v = Math.max(1, Math.min(20, +e.target.value));
-                      setCr(v);
-                      spawnMonster(selectedBiome, selectedTier, v);
-                    }}
-                    className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1 text-stone-100 font-mono-nums"
-                  />
+            {/* HACKING PVE MOB */}
+            {hackTarget === 'mob' && (
+              <div className="space-y-4 text-xs font-mono-nums">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-stone-400 block mb-1">Mob HP</label>
+                    <input
+                      type="number"
+                      value={mob.hp}
+                      onChange={e => setMob({ ...mob, hp: +e.target.value })}
+                      className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-2 text-stone-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-stone-400 block mb-1">Mob Defense (DV)</label>
+                    <input
+                      type="number"
+                      value={mob.defense}
+                      onChange={e => setMob({ ...mob, defense: +e.target.value })}
+                      className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-2 text-stone-100"
+                    />
+                  </div>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+      )}
 
-              {/* + SR Input and Button */}
-              <div className="flex items-center gap-2 pt-2 border-t border-[#1a2821] text-xs">
-                <span className="text-stone-300 font-semibold">Add SR:</span>
-                <input
-                  type="number"
-                  value={hackSrAdd}
-                  onChange={e => setHackSrAdd(+e.target.value)}
-                  className="w-24 bg-[#1b2b22] border border-[#2e4235] rounded px-2 py-1 text-stone-100 font-mono-nums"
-                />
-                <button
-                  onClick={() => {
-                    setCh(c => ({
-                      ...c,
-                      totalSR: c.totalSR + hackSrAdd,
-                      walletSR: c.walletSR + hackSrAdd
-                    }));
-                    addLog('system', `GM granted +${hackSrAdd} SR.`);
-                  }}
-                  className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold"
-                >
-                  + Add SR
-                </button>
+      {/* -------------------------------------------------------------------------- */}
+      {/* 9-CARD DECK VIEWER MODAL */}
+      {/* -------------------------------------------------------------------------- */}
+      {isDeckViewerOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#121c16] p-6 rounded-2xl border border-amber-500/50 shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-[#233529]">
+              <div>
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest font-mono-nums">
+                  Deterministic Deck · {deckViewerTarget === 'p1' ? p1.name : p2.name}
+                </span>
+                <h2 className="text-base font-bold text-stone-100 font-display">
+                  {deckViewerTarget === 'p1' ? p1.cls : p2.cls} Crucible Deck (9 Cards)
+                </h2>
               </div>
+              <button
+                onClick={() => setIsDeckViewerOpen(false)}
+                className="text-stone-400 hover:text-white px-2 py-1 rounded bg-[#1e2f25] text-xs font-bold"
+              >
+                ✕ Close
+              </button>
             </div>
 
-            {/* Equipment & Item Spawner (Synced with Item Forge) */}
-            <div className="p-3 bg-[#0d1410] rounded-xl border border-[#22332a] space-y-2 text-xs">
-              <span className="text-xs font-bold text-amber-300 uppercase tracking-wide block">
-                Equipment Spawner (Direct to Inventory)
-              </span>
-              <p className="text-[11px] text-stone-400">
-                Spawn any weapon, armor, or consumable into the character's inventory pack:
-              </p>
-
-              <div className="flex gap-2">
-                <select
-                  value={selectedItemToSpawn}
-                  onChange={e => setSelectedItemToSpawn(e.target.value)}
-                  className="flex-1 bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                >
-                  {allItems.map(it => (
-                    <option key={it.id} value={it.id}>
-                      [{it.category.toUpperCase()}] {it.name} ({it.rarity} - {it.biome})
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => {
-                    const found = allItems.find(i => i.id === selectedItemToSpawn) || allItems[0];
-                    if (found) {
-                      setCh(c => ({
-                        ...c,
-                        inventory: [...c.inventory, found]
-                      }));
-                      addLog('loot', `GM added ${found.name} (${found.category}) directly to Inventory.`);
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold whitespace-nowrap"
-                >
-                  + Add to Inventory
-                </button>
-              </div>
-            </div>
-
-            {/* Direct Stat & HP/MP Overrides */}
-            <div className="space-y-3 text-xs font-mono-nums">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-stone-400 block mb-1">Player HP</label>
-                  <input
-                    type="number"
-                    value={ch.hp}
-                    onChange={e => setCh({ ...ch, hp: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {(CLASS_PVP_DECKS[deckViewerTarget === 'p1' ? p1.cls : p2.cls] || []).map(card => (
+                <div key={card.id} className="p-3 rounded-xl bg-[#0b120e] border border-[#203025] flex flex-col justify-between text-xs space-y-2">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] font-bold uppercase text-amber-400">{card.type}</span>
+                      {card.range && <span className="text-[9px] text-sky-400 font-mono-nums">R: {card.range}</span>}
+                    </div>
+                    <h3 className="font-bold text-stone-200">{card.title}</h3>
+                    <p className="text-[11px] text-stone-400 mt-1 leading-snug">{card.effect}</p>
+                  </div>
+                  {card.flavor && (
+                    <span className="text-[9px] text-stone-500 italic block pt-1 border-t border-[#18261e]">
+                      "{card.flavor}"
+                    </span>
+                  )}
                 </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">Player MP</label>
-                  <input
-                    type="number"
-                    value={ch.mp}
-                    onChange={e => setCh({ ...ch, mp: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="text-stone-400 block mb-1">Lives (♥)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={9}
-                    value={ch.lives}
-                    onChange={e => setCh({ ...ch, lives: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">Wallet SR</label>
-                  <input
-                    type="number"
-                    value={ch.walletSR}
-                    onChange={e => setCh({ ...ch, walletSR: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">1-HP Summons</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={summons.length}
-                    onChange={e => {
-                      const count = Math.max(0, +e.target.value);
-                      setSummons(Array.from({ length: count }, () => ({ hp: 1 })));
-                    }}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[#202e26]">
-                <div>
-                  <label className="text-stone-400 block mb-1">Mob HP</label>
-                  <input
-                    type="number"
-                    value={mob.hp}
-                    onChange={e => setMob({ ...mob, hp: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">Mob Defense (DV)</label>
-                  <input
-                    type="number"
-                    value={mob.defense}
-                    onChange={e => setMob({ ...mob, defense: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      {/* GM Math Tuning Panel Modal */}
-      {isTuningPanelOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#141e18] p-6 rounded-2xl border border-teal-500/50 shadow-2xl max-w-lg w-full space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-base font-bold text-teal-400 font-display">
-                ⚙ GM Live Math Tuning (Saved Independently)
-              </h2>
-              <button
-                onClick={() => setIsTuningPanelOpen(false)}
-                className="text-stone-400 hover:text-white text-xs px-2 py-1 rounded bg-[#22332a]"
-              >
-                Close
-              </button>
-            </div>
-
-            <p className="text-xs text-stone-300">
-              Tune all core scaling formulas live. These changes are saved separately for testing and will not affect the main playtest table.
+      {/* -------------------------------------------------------------------------- */}
+      {/* DEFEATED MODAL (PVE REVIVE) */}
+      {/* -------------------------------------------------------------------------- */}
+      {isDefeatedModalOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1b1212] p-6 rounded-2xl border border-red-500 shadow-2xl max-w-md w-full text-center space-y-4">
+            <h2 className="text-lg font-bold text-red-400 font-display">
+              ☠ Champion Fallen
+            </h2>
+            <p className="text-xs text-stone-300 leading-relaxed">
+              {p1.name} collapsed in battle. In Balance Analytics, defeat never permanently destroys your setup. You can revive or reset.
             </p>
-
-            <div className="space-y-3 text-xs font-mono-nums">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-stone-400 block mb-1">Mob HP Base</label>
-                  <input
-                    type="number"
-                    value={tuning.mobHpBase}
-                    onChange={e => setTuning({ ...tuning, mobHpBase: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">Mob HP per CR</label>
-                  <input
-                    type="number"
-                    value={tuning.mobHpPerCr}
-                    onChange={e => setTuning({ ...tuning, mobHpPerCr: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-stone-400 block mb-1">Mob Base DEF</label>
-                  <input
-                    type="number"
-                    value={tuning.mobDefBase}
-                    onChange={e => setTuning({ ...tuning, mobDefBase: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-stone-400 block mb-1">Death Wallet Loss %</label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    value={tuning.walletLossFraction}
-                    onChange={e => setTuning({ ...tuning, walletLossFraction: +e.target.value })}
-                    className="w-full bg-[#0c120e] border border-[#2e4235] rounded p-1.5 text-stone-100"
-                  />
-                </div>
-              </div>
-
+            <div className="flex gap-2">
               <button
                 onClick={() => {
-                  setTuning(DEFAULT_TUNING);
-                  alert('Reset to default GDD formulas.');
+                  setP1(c => ({ ...c, hp: p1Derived.maxHp }));
+                  setIsDefeatedModalOpen(false);
+                  setIsPveOver(false);
+                  addLog('system', `${p1.name} was revived by GM.`);
                 }}
-                className="w-full py-1.5 rounded bg-[#203227] hover:bg-[#2b4234] text-stone-300 border border-[#32493a] text-xs"
+                className="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
               >
-                Reset Tuning to Canon Defaults
+                Revive Full HP
+              </button>
+              <button
+                onClick={() => {
+                  spawnMonster(selectedBiome, selectedTier, cr);
+                  setIsDefeatedModalOpen(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-[#241717] hover:bg-red-950 text-red-300 border border-red-800 text-xs"
+              >
+                Reset Match
               </button>
             </div>
           </div>

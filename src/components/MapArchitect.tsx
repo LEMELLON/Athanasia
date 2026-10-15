@@ -5,6 +5,10 @@ import { BIOME_CONFIGS, DEFAULT_MOBS_BY_BIOME } from '../data/defaultGameData';
 interface Props {
   mapTiles: Record<string, HexTile>;
   onUpdateMap: (newTiles: Record<string, HexTile>) => void;
+  chunkNodes?: Record<string, ChunkNode>;
+  onUpdateChunks?: (newChunks: Record<string, ChunkNode>) => void;
+  chunkK?: number;
+  onUpdateChunkK?: (newK: number) => void;
   onTileSelect?: (tileKey: string) => void;
 }
 
@@ -12,7 +16,7 @@ type EditorMode = 'chunk' | 'tile';
 type ChunkTool = 'toggle' | 'boss' | 'biome' | 'spawn';
 type BrushTool = 'P' | 'W' | 'O' | 'C' | 'M' | 'Portal' | 'Shop' | 'Shrine' | 'Spawn' | 'Erase' | 'Biome';
 
-interface ChunkNode {
+export interface ChunkNode {
   key: string; // "q,r"
   q: number;
   r: number;
@@ -60,19 +64,31 @@ function getChunkTileOffsets(kr: number): [number, number][] {
   return offsets;
 }
 
-export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
+export const MapArchitect: React.FC<Props> = ({
+  mapTiles,
+  onUpdateMap,
+  chunkNodes: externalChunkNodes,
+  onUpdateChunks,
+  chunkK: externalChunkK,
+  onUpdateChunkK
+}) => {
   const [editorMode, setEditorMode] = useState<EditorMode>('chunk');
 
   // Chunk Size (kr): 0 = 1 tile, 1 = 7 tiles (flower), 2 = 19 tiles
-  const [chunkK, setChunkK] = useState<number>(1);
-  // Max Chunk Capacity: 7, 19, 37, 61, 91
+  const [localChunkK, setLocalChunkK] = useState<number>(externalChunkK ?? 1);
+  const chunkK = externalChunkK !== undefined ? externalChunkK : localChunkK;
+
+  // Max Chunk Capacity
   const [maxChunks, setMaxChunks] = useState<number>(37);
   const [autoSpawns, setAutoSpawns] = useState<boolean>(true);
 
   // Chunk Editor State
   const [chunkTool, setChunkTool] = useState<ChunkTool>('biome');
   const [chunkBiomeBrush, setChunkBiomeBrush] = useState<BiomeType | 'Random'>('Pyria');
-  const [chunkNodes, setChunkNodes] = useState<Record<string, ChunkNode>>(() => {
+  const [localChunkNodes, setLocalChunkNodes] = useState<Record<string, ChunkNode>>(() => {
+    if (externalChunkNodes && Object.keys(externalChunkNodes).length > 0) {
+      return externalChunkNodes;
+    }
     // Initial 19 chunks
     const initial: Record<string, ChunkNode> = {};
     const biomesList: BiomeType[] = ['Pyria', 'Hydoria', 'Aeria', 'Geia', 'Phosia', 'Skotosia'];
@@ -107,6 +123,20 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
     }
     return initial;
   });
+
+  const chunkNodes = (externalChunkNodes && Object.keys(externalChunkNodes).length > 0)
+    ? externalChunkNodes
+    : localChunkNodes;
+
+  const updateChunkNodes = (newChunks: Record<string, ChunkNode>) => {
+    setLocalChunkNodes(newChunks);
+    if (onUpdateChunks) onUpdateChunks(newChunks);
+  };
+
+  const updateChunkK = (newK: number) => {
+    setLocalChunkK(newK);
+    if (onUpdateChunkK) onUpdateChunkK(newK);
+  };
 
   // Tile Brush State
   const [activeBrush, setActiveBrush] = useState<BrushTool>('W');
@@ -265,7 +295,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
           isBoss: false
         };
       }
-      setChunkNodes(updated);
+      updateChunkNodes(updated);
       rebuildTilesFromChunks(updated, chunkK);
       return;
     }
@@ -277,7 +307,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
       existing.isBoss = true;
       existing.biome = 'Boss Sanctum';
       delete existing.spawnIndex;
-      setChunkNodes(updated);
+      updateChunkNodes(updated);
       rebuildTilesFromChunks(updated, chunkK);
       return;
     }
@@ -285,7 +315,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
     if (chunkTool === 'biome') {
       if (existing.isBoss) return;
       existing.biome = chunkBiomeBrush;
-      setChunkNodes(updated);
+      updateChunkNodes(updated);
       rebuildTilesFromChunks(updated, chunkK);
       return;
     }
@@ -299,7 +329,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
         const next = [1, 2, 3, 4, 5, 6].find(s => !used.includes(s)) || 1;
         existing.spawnIndex = next;
       }
-      setChunkNodes(updated);
+      updateChunkNodes(updated);
       rebuildTilesFromChunks(updated, chunkK);
       return;
     }
@@ -433,7 +463,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
       '0,1': { key: '0,1', q: 0, r: 1, biome: 'Skotosia', isBoss: false, spawnIndex: 6 },
     };
     setMaxChunks(7);
-    setChunkNodes(minChunks);
+    updateChunkNodes(minChunks);
     rebuildTilesFromChunks(minChunks, chunkK);
   };
 
@@ -682,7 +712,7 @@ export const MapArchitect: React.FC<Props> = ({ mapTiles, onUpdateMap }) => {
                       value={chunkK}
                       onChange={e => {
                         const newKr = Math.max(0, Math.floor(+e.target.value) || 0);
-                        setChunkK(newKr);
+                        updateChunkK(newKr);
                         rebuildTilesFromChunks(chunkNodes, newKr);
                       }}
                       className="w-full bg-[#1b2b22] border border-[#2e4235] rounded p-1.5 text-stone-100 font-mono-nums"

@@ -5,9 +5,10 @@ import { MapArchitect } from './components/MapArchitect';
 import { PlaytestSimulator } from './components/PlaytestSimulator';
 import { DiceChamber } from './components/DiceChamber';
 import { BalanceAnalytics } from './components/BalanceAnalytics';
-import { ItemEntity, HexTile, PlayerCharacter } from './types/game';
+import { CrucibleCards } from './components/CrucibleCards';
+import { ItemEntity, HexTile, PlayerCharacter, ChunkNode } from './types/game';
 
-type TabType = 'forge' | 'map' | 'simulator' | 'dice' | 'analytics';
+type TabType = 'forge' | 'map' | 'simulator' | 'dice' | 'analytics' | 'cards';
 
 export default function App() {
   const [gameState, setGameState] = useState<SavedGameState>(() => loadSavedState());
@@ -36,6 +37,14 @@ export default function App() {
   const handleUpdateMap = (newMap: Record<string, HexTile>) => {
     setGameState(prev => ({ ...prev, mapTiles: newMap }));
     showNotification('Hex map saved to instance.');
+  };
+
+  const handleUpdateChunks = (newChunks: Record<string, ChunkNode>) => {
+    setGameState(prev => ({ ...prev, chunkNodes: newChunks }));
+  };
+
+  const handleUpdateChunkK = (newK: number) => {
+    setGameState(prev => ({ ...prev, chunkK: newK }));
   };
 
   const handleUpdatePlayers = (newPlayers: PlayerCharacter[]) => {
@@ -125,6 +134,12 @@ export default function App() {
           >
             Balance Analytics
           </button>
+          <button
+            onClick={() => setActiveTab('cards')}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${activeTab === 'cards' ? 'bg-amber-500 text-black shadow-md' : 'text-stone-300 hover:text-white'}`}
+          >
+            Crucible Cards
+          </button>
         </nav>
 
         {/* Zone 3: Primary Action & Persistence Controls */}
@@ -175,6 +190,10 @@ export default function App() {
           <MapArchitect
             mapTiles={gameState.mapTiles}
             onUpdateMap={handleUpdateMap}
+            chunkNodes={gameState.chunkNodes}
+            onUpdateChunks={handleUpdateChunks}
+            chunkK={gameState.chunkK}
+            onUpdateChunkK={handleUpdateChunkK}
           />
         )}
 
@@ -184,6 +203,10 @@ export default function App() {
 
         {activeTab === 'analytics' && (
           <BalanceAnalytics allItems={gameState.items} />
+        )}
+
+        {activeTab === 'cards' && (
+          <CrucibleCards />
         )}
       </main>
 
